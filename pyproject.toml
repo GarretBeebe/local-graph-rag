@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
     "pytest-cov",

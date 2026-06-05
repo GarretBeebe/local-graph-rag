@@ -126,7 +126,7 @@ local-graph-rag/
 ## Implementation Phases
 
 - [x] **Phase 1** — Project skeleton, copied infrastructure, `settings.py`, `pyproject.toml`
-- [ ] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
+- [x] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
 - [ ] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, Qdrant + graph cleanup on re-ingestion, crash recovery
 - [ ] **Phase 4** — Community detection + summarization
 - [ ] **Phase 5** — Local and global retrieval paths + CLI query interface

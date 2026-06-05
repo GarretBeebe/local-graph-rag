@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# local-graph-rag stack — runs on Windows, macOS, and Linux via Docker.
+#
+# Ollama runs on the host (not in Docker). Install it from https://ollama.com
+# and make sure it is running before starting this stack.
+#
+# Quick start:
+#   cp .env.example .env   # fill in QDRANT_API_KEY and DOCS_PATH
+#   docker compose up -d qdrant
+#   docker compose --profile indexer run --rm indexer   # index documents
+#   docker compose up -d api                            # start API (Phase 6+)
+# ---------------------------------------------------------------------------
+
+services:
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: graph-rag-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+      QDRANT__TELEMETRY_DISABLED: "true"
+
+  api:
+    image: local-graph-rag:latest
+    build: .
+    container_name: graph-rag-api
+    restart: unless-stopped
+    command: uvicorn web.api_server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      qdrant:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      SQLITE_PATH: /app/data/graph.db
+      DOCS_PATH: /app/documents
+      EXTRACT_MODEL: ${EXTRACT_MODEL:-qwen2.5:3b}
+      SUMMARIZE_MODEL: ${SUMMARIZE_MODEL:-qwen2.5:7b}
+      GEN_MODEL: ${GEN_MODEL:-qwen2.5:14b}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      GENERATION_CONCURRENCY_LIMIT: ${GENERATION_CONCURRENCY_LIMIT:-1}
+      ENTITY_RETRIEVAL_K: ${ENTITY_RETRIEVAL_K:-5}
+      ENTITY_NEIGHBORHOOD_HOPS: ${ENTITY_NEIGHBORHOOD_HOPS:-2}
+      COMMUNITY_RETRIEVAL_N: ${COMMUNITY_RETRIEVAL_N:-5}
+    volumes:
+      - graph-data:/app/data
+      - ${DOCS_PATH:?Set DOCS_PATH in .env}:/app/documents:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Run on-demand — not started by `docker compose up`.
+  # Usage: docker compose --profile indexer run --rm indexer
+  indexer:
+    image: local-graph-rag:latest
+    build: .
+    profiles: ["indexer"]
+    command: python -m ingest.index_documents
+    depends_on:
+      qdrant:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      SQLITE_PATH: /app/data/graph.db
+      DOCS_PATH: /app/documents
+      EXTRACT_MODEL: ${EXTRACT_MODEL:-qwen2.5:3b}
+      SUMMARIZE_MODEL: ${SUMMARIZE_MODEL:-qwen2.5:7b}
+      GEN_MODEL: ${GEN_MODEL:-qwen2.5:14b}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      GENERATION_CONCURRENCY_LIMIT: ${GENERATION_CONCURRENCY_LIMIT:-1}
+    volumes:
+      - graph-data:/app/data
+      - ${DOCS_PATH:?Set DOCS_PATH in .env}:/app/documents:ro
+
+volumes:
+  qdrant-storage:
+  graph-data:

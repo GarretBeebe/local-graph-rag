@@ -1,0 +1,14 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+data/
+.env
+documents/
+context/
+.pytest_cache
+.mypy_cache
+*.egg-info
+*.sqlite3
