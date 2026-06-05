@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Data — SQLite databases and Qdrant snapshots
+data/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
