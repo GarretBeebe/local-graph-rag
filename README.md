@@ -57,6 +57,14 @@ At query time, a router classifies the question and picks a retrieval strategy:
 Local queries combine vector search (to find seed entities) with graph traversal (to expand
 context). Global queries use pre-built community summaries retrieved by embedding similarity.
 
+### Resumable ingestion
+
+Ingestion is safe to interrupt. A SQLite `chunks` registry maps every Qdrant point ID back to
+its source file. Before re-processing any file, the pipeline deletes its prior vectors from
+Qdrant and its prior graph data from SQLite, then re-ingests cleanly. The file fingerprint is
+written last, so any interrupted file has no fingerprint and is automatically retried — without
+re-processing files that already completed successfully.
+
 ---
 
 ## Stack
@@ -119,7 +127,7 @@ local-graph-rag/
 
 - [ ] **Phase 1** — Project skeleton, copied infrastructure, `settings.py`, `pyproject.toml`
 - [ ] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
-- [ ] **Phase 3** — Full ingestion pipeline with fingerprint-based change detection
+- [ ] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, Qdrant + graph cleanup on re-ingestion, crash recovery
 - [ ] **Phase 4** — Community detection + summarization
 - [ ] **Phase 5** — Local and global retrieval paths + CLI query interface
 - [ ] **Phase 6** — FastAPI web server with streaming

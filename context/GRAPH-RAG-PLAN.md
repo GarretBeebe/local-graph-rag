@@ -136,9 +136,17 @@ CREATE TABLE relationships (
     source_doc  TEXT                -- filepath the relationship was extracted from
 );
 
+-- Chunk registry: maps Qdrant point IDs back to their source file
+-- Required for pre-deletion cleanup on re-ingestion and chunk_entities lookups
+CREATE TABLE chunks (
+    chunk_id    TEXT PRIMARY KEY,   -- Qdrant point UUID
+    filepath    TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL    -- position within file; used for ordering/debugging
+);
+
 -- Chunk-to-entity membership
 CREATE TABLE chunk_entities (
-    chunk_id    TEXT,               -- Qdrant point UUID
+    chunk_id    TEXT REFERENCES chunks(chunk_id),
     entity_id   TEXT REFERENCES entities(id),
     PRIMARY KEY (chunk_id, entity_id)
 );
@@ -148,7 +156,16 @@ CREATE TABLE communities (
     id          INTEGER PRIMARY KEY,
     summary     TEXT NOT NULL,
     entity_ids  TEXT,               -- JSON array of entity IDs
+    member_hash TEXT,               -- SHA-256 of sorted entity_ids; skip re-summarization if unchanged
     embedding   BLOB                -- embedded summary for semantic lookup
+);
+
+-- Per-file extraction batch cache for crash recovery
+CREATE TABLE extraction_cache (
+    filepath    TEXT NOT NULL,
+    batch_index INTEGER NOT NULL,
+    result      TEXT NOT NULL,      -- JSON extraction result for this batch
+    PRIMARY KEY (filepath, batch_index)
 );
 ```
 
@@ -183,6 +200,9 @@ Text:
 - Budget ~1 LLM call per file. Not per chunk — batch all chunks for a file into one extraction
   call. Keep the combined input under ~4000 tokens to avoid quality degradation on smaller models.
 - If a file's chunks exceed the batch token budget, split into 2-3 calls and merge results.
+- Each batch result is written to `extraction_cache` immediately after the LLM call returns.
+  On retry, completed batches are read from cache rather than re-called. Cache is cleared when
+  the file's fingerprint is written.
 
 ### 2. Graph Manager (`graph/store.py`)
 
@@ -203,8 +223,11 @@ Uses `SUMMARIZE_MODEL` (default: `qwen2.5:7b`). Community summarization requires
 than entity extraction — the 3B model produces thin summaries — but does not need the full 14B.
 The 7B hits a good quality/speed balance on this hardware (~20-35 tok/sec).
 
-This runs once after initial ingestion, and again any time entities are added. Summaries are
-cached in SQLite; only communities whose entity membership changed need re-summarization.
+This runs once after initial ingestion, and again any time entities are added. Before summarizing
+each community, compute SHA-256 of its sorted `entity_ids` and compare to `member_hash` in SQLite.
+Skip communities where the hash matches — only summarize communities whose membership changed or
+that were never summarized. This makes the summarization pass resumable: a crash mid-run leaves
+completed communities with their hashes intact and they are skipped on the next run.
 
 ### 4. Ingestion Pipeline (`ingest/index_documents.py`)
 
@@ -212,13 +235,28 @@ New pipeline, replacing (not extending) the rag-system version:
 
 ```
 read_file
+    → check fingerprint → skip if unchanged
+    → delete prior data for this file
+          prior_ids = SELECT chunk_id FROM chunks WHERE filepath = filepath
+          qdrant.delete(prior_ids)                                           -- remove stale vectors
+          DELETE FROM chunk_entities WHERE chunk_id IN (prior_ids)
+          DELETE FROM chunks WHERE filepath = filepath
+          DELETE FROM relationships WHERE source_doc = filepath
+          DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM relationships)  -- orphan cleanup
     → chunk_document          (copied from rag-system)
     → embed_batch             (copied from rag-system)
     → upsert to Qdrant        (same as rag-system)
-    → extract_entities_batch  (new: one LLM call per file over concatenated chunks)
+    → INSERT INTO chunks      (chunk_id, filepath, chunk_index) for each new point
+    → extract_entities_batch  (new: one LLM call per file; batches cached in extraction_cache)
+    → DELETE FROM extraction_cache WHERE filepath = filepath  -- clear on success
     → graph_store.upsert_*    (new)
     → fingerprint (SQLite)    (same pattern as rag-system)
 ```
+
+**Interruption recovery:** The fingerprint is written last, so any interrupted file has no fingerprint
+and will be re-processed on the next run. The cleanup step at the top of the pipeline ensures
+previously written graph data for that file is removed before re-extraction, preventing duplicate
+or double-weighted edges. Files that completed successfully are fingerprinted and skipped.
 
 ### 5. Query Router (`api/query_router.py`)
 
