@@ -6,8 +6,9 @@ vector search to answer both specific and thematic questions.
 Runs entirely on local hardware via [Ollama](https://ollama.ai) and
 [Qdrant](https://qdrant.tech). No external API calls required.
 
-> **Status:** Planning phase. See [`context/GRAPH-RAG-PLAN.md`](context/GRAPH-RAG-PLAN.md) for the
-> full implementation plan.
+> **Status:** Phases 1–3 complete. The ingestion pipeline is functional: documents are chunked,
+> embedded into Qdrant, and entity/relationship graphs are extracted and stored in SQLite.
+> See [`context/GRAPH-RAG-PLAN.md`](context/GRAPH-RAG-PLAN.md) for the full implementation plan.
 
 ---
 
@@ -59,11 +60,21 @@ context). Global queries use pre-built community summaries retrieved by embeddin
 
 ### Resumable ingestion
 
-Ingestion is safe to interrupt. A SQLite `chunks` registry maps every Qdrant point ID back to
-its source file. Before re-processing any file, the pipeline deletes its prior vectors from
-Qdrant and its prior graph data from SQLite, then re-ingests cleanly. The file fingerprint is
-written last, so any interrupted file has no fingerprint and is automatically retried — without
-re-processing files that already completed successfully.
+Ingestion is safe to interrupt and guarantees consistent state across restarts:
+
+- **Fingerprint written last.** Each file's SHA-256 fingerprint is written to SQLite only after
+  all Qdrant and graph writes complete. A crashed run leaves no fingerprint, so the file is
+  retried on the next run. Files that completed are skipped via hash comparison.
+
+- **Cleanup ordering.** When re-indexing a changed file, vectors are deleted from Qdrant
+  *before* removing chunk records from SQLite. If Qdrant is unreachable, the SQLite chunk IDs
+  survive and the next run can retry the Qdrant delete. When writing new vectors, chunk IDs are
+  registered in SQLite *before* upserting to Qdrant, so any Qdrant failure leaves behind
+  deletable IDs for the next run.
+
+- **Stale file cleanup.** At startup, the pipeline compares tracked paths against files on disk
+  and removes data for any files that were deleted — vectors from Qdrant, entities and
+  relationships from SQLite, and the fingerprint record.
 
 ---
 
@@ -92,32 +103,38 @@ All three are overridable via environment variables.
 
 ---
 
-## Project Layout (planned)
+## Project Layout
+
+Files marked `(planned)` are not yet implemented.
 
 ```
 local-graph-rag/
 ├── api/
-│   ├── embed.py              # Ollama embedding (copied from rag-system)
-│   ├── ollama_client.py      # Ollama HTTP client (copied from rag-system)
-│   ├── query_graph_rag.py    # Query entry point (local + global)
-│   ├── query_router.py       # Local vs. global classifier
-│   ├── local_retrieval.py    # Entity lookup + graph traversal
-│   └── global_retrieval.py   # Community summary retrieval + map-reduce
+│   ├── embed.py              # Ollama embedding
+│   ├── ollama_client.py      # Ollama HTTP client
+│   ├── query_graph_rag.py    # Query entry point — local + global  (planned)
+│   ├── query_router.py       # Local vs. global classifier          (planned)
+│   ├── local_retrieval.py    # Entity lookup + graph traversal      (planned)
+│   └── global_retrieval.py   # Community summary retrieval          (planned)
 ├── graph/
-│   ├── store.py              # NetworkX + SQLite graph manager
+│   ├── store.py              # NetworkX + SQLite graph store
 │   ├── extractor.py          # LLM entity/relationship extraction
-│   └── summarizer.py         # Community summarization
+│   └── summarizer.py         # Community summarization              (planned)
 ├── ingest/
-│   ├── chunkers.py           # Document chunking (copied from rag-system)
+│   ├── chunkers.py           # Document chunking
 │   └── index_documents.py    # Full ingestion pipeline
 ├── common/
 │   ├── config.py             # YAML config loader
 │   ├── paths.py              # Path normalization
 │   └── qdrant.py             # Qdrant client singleton
 ├── web/
-│   └── api_server.py         # FastAPI server (OpenAI-compat chat endpoint)
+│   └── api_server.py         # FastAPI server (OpenAI-compat)       (planned)
+├── tests/
+│   ├── test_graph.py         # GraphStore + extractor unit tests
+│   └── test_ingestion.py     # Fingerprint store + hash utility tests
 ├── context/
-│   └── GRAPH-RAG-PLAN.md     # Full architecture and implementation plan
+│   ├── GRAPH-RAG-PLAN.md     # Full architecture and implementation plan
+│   └── PHASE3-PUNCH-LIST.md  # Open data-integrity issues (findings 1–4)
 └── settings.py               # Env-var driven config
 ```
 
@@ -127,8 +144,8 @@ local-graph-rag/
 
 - [x] **Phase 1** — Project skeleton, copied infrastructure, `settings.py`, `pyproject.toml`
 - [x] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
-- [ ] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, Qdrant + graph cleanup on re-ingestion, crash recovery
-- [ ] **Phase 4** — Community detection + summarization
+- [x] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, crash-safe Qdrant ↔ SQLite ordering, stale file cleanup
+- [ ] **Phase 4** — Community detection + summarization (`graph/summarizer.py`)
 - [ ] **Phase 5** — Local and global retrieval paths + CLI query interface
 - [ ] **Phase 6** — FastAPI web server with streaming
 

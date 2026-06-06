@@ -114,9 +114,11 @@ def test_upsert_relationship_dedup_increments_weight(store: GraphStore):
 
 
 def test_register_and_get_chunks(store: GraphStore):
-    store.register_chunk("uuid-1", "/docs/foo.py", 0)
-    store.register_chunk("uuid-2", "/docs/foo.py", 1)
-    store.register_chunk("uuid-3", "/docs/bar.py", 0)
+    store.register_chunks([
+        ("uuid-1", "/docs/foo.py", 0),
+        ("uuid-2", "/docs/foo.py", 1),
+        ("uuid-3", "/docs/bar.py", 0),
+    ])
     chunks = store.get_chunks_for_file("/docs/foo.py")
     assert chunks == ["uuid-1", "uuid-2"]
 
@@ -129,7 +131,7 @@ def test_register_and_get_chunks(store: GraphStore):
 def test_delete_file_data_removes_orphan(store: GraphStore):
     store.upsert_entity("orphan")
     store.upsert_entity("shared")
-    store.register_chunk("c1", "file_a.py", 0)
+    store.register_chunks([("c1", "file_a.py", 0)])
     store.upsert_relationship("orphan", "shared", "uses", "file_a.py")
 
     prior_ids = store.delete_file_data("file_a.py")
@@ -142,8 +144,7 @@ def test_delete_file_data_removes_orphan(store: GraphStore):
 def test_delete_file_data_keeps_shared_entity(store: GraphStore):
     store.upsert_entity("shared")
     store.upsert_entity("other")
-    store.register_chunk("c1", "file_a.py", 0)
-    store.register_chunk("c2", "file_b.py", 0)
+    store.register_chunks([("c1", "file_a.py", 0), ("c2", "file_b.py", 0)])
     store.upsert_relationship("shared", "other", "uses", "file_a.py")
     store.upsert_relationship("shared", "other", "uses", "file_b.py")
 
@@ -156,9 +157,11 @@ def test_delete_file_data_keeps_shared_entity(store: GraphStore):
 
 
 def test_delete_file_data_returns_prior_chunk_ids(store: GraphStore):
-    store.register_chunk("uuid-A", "target.py", 0)
-    store.register_chunk("uuid-B", "target.py", 1)
-    store.register_chunk("uuid-C", "other.py", 0)
+    store.register_chunks([
+        ("uuid-A", "target.py", 0),
+        ("uuid-B", "target.py", 1),
+        ("uuid-C", "other.py", 0),
+    ])
 
     prior = store.delete_file_data("target.py")
     assert set(prior) == {"uuid-A", "uuid-B"}

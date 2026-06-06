@@ -92,7 +92,9 @@ def _normalize_entities(entities: list[dict]) -> tuple[list[dict], set[str]]:
             }
         else:
             by_slug[slug]["description"] = max(
-                existing.get("description") or "", entity.get("description") or "", key=len
+                str(existing.get("description") or ""),
+                str(entity.get("description") or ""),
+                key=len,
             )
             if existing.get("type") is None and entity.get("type"):
                 by_slug[slug]["type"] = entity["type"]
