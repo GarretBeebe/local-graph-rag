@@ -1,5 +1,6 @@
 """SQLite + NetworkX graph store for entities, relationships, and chunk metadata."""
 
+import json
 import logging
 import re
 import sqlite3
@@ -229,6 +230,17 @@ class GraphStore:
                 [(cid, eid) for cid in chunk_ids for eid in entity_ids],
             )
 
+    def get_entities_by_chunk_ids(self, chunk_ids: list[str]) -> list[str]:
+        """Return distinct entity_ids linked to any of the given chunk_ids."""
+        if not chunk_ids:
+            return []
+        placeholders = ",".join("?" * len(chunk_ids))
+        rows = self._conn.execute(
+            f"SELECT DISTINCT entity_id FROM chunk_entities WHERE chunk_id IN ({placeholders})",
+            chunk_ids,
+        ).fetchall()
+        return [row["entity_id"] for row in rows]
+
     # ------------------------------------------------------------------
     # Cleanup / re-ingestion
     # ------------------------------------------------------------------
@@ -388,6 +400,87 @@ class GraphStore:
             "entities": [dict(row) for row in entity_rows],
             "relationships": [dict(row) for row in rel_rows],
         }
+
+    # ------------------------------------------------------------------
+    # Communities
+    # ------------------------------------------------------------------
+
+    def get_entities_for_community(self, community_id: int) -> list[dict]:
+        """Return entity rows assigned to a given Louvain community."""
+        rows = self._conn.execute(
+            "SELECT id, name, type, description FROM entities WHERE community = ?",
+            (community_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_relationships_for_community(self, community_id: int) -> list[dict]:
+        """Return relationships where both endpoints belong to the given community."""
+        rows = self._conn.execute(
+            """
+            SELECT r.source_id, r.target_id, r.label, r.weight
+            FROM relationships r
+            JOIN entities s ON r.source_id = s.id
+            JOIN entities t ON r.target_id = t.id
+            WHERE s.community = ? AND t.community = ?
+            """,
+            (community_id, community_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_community(
+        self,
+        community_id: int,
+        summary: str,
+        entity_ids: list[str],
+        member_hash: str,
+        embedding: bytes,
+    ) -> None:
+        """Insert or replace a community summary row.
+
+        embedding must be np.array(vec, dtype=np.float32).tobytes().
+        Deserialize with np.frombuffer(embedding, dtype=np.float32).
+        """
+        with self._write():
+            self._conn.execute(
+                "INSERT OR REPLACE INTO communities "
+                "(id, summary, entity_ids, member_hash, embedding) VALUES (?, ?, ?, ?, ?)",
+                (community_id, summary, json.dumps(entity_ids), member_hash, embedding),
+            )
+
+    def _deserialize_community_row(self, row: sqlite3.Row) -> dict:
+        d = dict(row)
+        d["entity_ids"] = json.loads(d["entity_ids"]) if d["entity_ids"] else []
+        return d
+
+    def get_community(self, community_id: int) -> dict | None:
+        """Return a single community row, or None if not found."""
+        row = self._conn.execute(
+            "SELECT id, summary, entity_ids, member_hash, embedding FROM communities WHERE id = ?",
+            (community_id,),
+        ).fetchone()
+        return self._deserialize_community_row(row) if row else None
+
+    def get_communities(self) -> list[dict]:
+        """Return all community rows (id, summary, entity_ids, member_hash, embedding)."""
+        rows = self._conn.execute(
+            "SELECT id, summary, entity_ids, member_hash, embedding FROM communities"
+        ).fetchall()
+        return [self._deserialize_community_row(row) for row in rows]
+
+    def get_active_community_ids(self) -> set[int]:
+        """Return distinct community IDs currently assigned to entities."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT community FROM entities WHERE community IS NOT NULL"
+        ).fetchall()
+        return {row["community"] for row in rows}
+
+    def delete_stale_communities(self) -> None:
+        """Remove community rows whose id is no longer assigned to any entity."""
+        with self._write():
+            self._conn.execute(
+                "DELETE FROM communities WHERE id NOT IN "
+                "(SELECT DISTINCT community FROM entities WHERE community IS NOT NULL)"
+            )
 
     # ------------------------------------------------------------------
 

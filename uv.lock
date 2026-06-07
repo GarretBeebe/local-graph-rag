@@ -427,6 +427,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "networkx" },
+    { name = "numpy" },
     { name = "python-louvain" },
     { name = "pyyaml" },
     { name = "qdrant-client" },
@@ -446,6 +447,7 @@ dev = [
 requires-dist = [
     { name = "fastapi" },
     { name = "networkx" },
+    { name = "numpy" },
     { name = "python-louvain" },
     { name = "pyyaml" },
     { name = "qdrant-client" },

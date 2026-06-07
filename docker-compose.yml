@@ -90,6 +90,24 @@ services:
       - graph-data:/app/data
       - ${DOCS_PATH:?Set DOCS_PATH in .env}:/app/documents:ro
 
+  # Run on-demand after indexer — not started by `docker compose up`.
+  # Usage: docker compose --profile summarizer run --rm summarizer
+  summarizer:
+    image: local-graph-rag:latest
+    build: .
+    profiles: ["summarizer"]
+    command: python -m graph.summarizer
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SQLITE_PATH: /app/data/graph.db
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      SUMMARIZE_MODEL: ${SUMMARIZE_MODEL:-qwen2.5:7b}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+      GENERATION_CONCURRENCY_LIMIT: ${GENERATION_CONCURRENCY_LIMIT:-1}
+    volumes:
+      - graph-data:/app/data
+
 volumes:
   qdrant-storage:
   graph-data:

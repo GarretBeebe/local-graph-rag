@@ -6,8 +6,8 @@ vector search to answer both specific and thematic questions.
 Runs entirely on local hardware via [Ollama](https://ollama.ai) and
 [Qdrant](https://qdrant.tech). No external API calls required.
 
-> **Status:** Phases 1–3 complete. The ingestion pipeline is functional: documents are chunked,
-> embedded into Qdrant, and entity/relationship graphs are extracted and stored in SQLite.
+> **Status:** Phases 1–4 complete. The ingestion pipeline is functional and communities are
+> detected and summarized. Retrieval and the web interface are coming in Phases 5–6.
 > See [`context/GRAPH-RAG-PLAN.md`](context/GRAPH-RAG-PLAN.md) for the full implementation plan.
 
 ---
@@ -103,6 +103,29 @@ All three are overridable via environment variables.
 
 ---
 
+## Quick start
+
+```bash
+cp .env.example .env          # set QDRANT_API_KEY and DOCS_PATH
+
+docker compose up -d qdrant
+
+# Index documents (Phase 3)
+docker compose --profile indexer run --rm indexer
+
+# Detect communities and build LLM summaries (Phase 4)
+docker compose --profile summarizer run --rm summarizer
+
+# Re-run with --force to regenerate all summaries even if membership is unchanged
+docker compose --profile summarizer run --rm summarizer python -m graph.summarizer --force
+```
+
+The summarizer is idempotent: it skips communities whose membership hasn't changed since the
+last run (tracked by a SHA-256 member hash). Run it after any indexer run that adds new
+documents.
+
+---
+
 ## Project Layout
 
 Files marked `(planned)` are not yet implemented.
@@ -119,7 +142,7 @@ local-graph-rag/
 ├── graph/
 │   ├── store.py              # NetworkX + SQLite graph store
 │   ├── extractor.py          # LLM entity/relationship extraction
-│   └── summarizer.py         # Community summarization              (planned)
+│   └── summarizer.py         # Louvain community detection + LLM summarization
 ├── ingest/
 │   ├── chunkers.py           # Document chunking
 │   └── index_documents.py    # Full ingestion pipeline
@@ -131,7 +154,8 @@ local-graph-rag/
 │   └── api_server.py         # FastAPI server (OpenAI-compat)       (planned)
 ├── tests/
 │   ├── test_graph.py         # GraphStore + extractor unit tests
-│   └── test_ingestion.py     # Fingerprint store + hash utility tests
+│   ├── test_ingestion.py     # Fingerprint store + hash utility tests
+│   └── test_summarizer.py    # Community summarizer unit tests
 ├── context/
 │   ├── GRAPH-RAG-PLAN.md     # Full architecture and implementation plan
 │   └── PHASE3-PUNCH-LIST.md  # Open data-integrity issues (findings 1–4)
@@ -145,7 +169,7 @@ local-graph-rag/
 - [x] **Phase 1** — Project skeleton, copied infrastructure, `settings.py`, `pyproject.toml`
 - [x] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
 - [x] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, crash-safe Qdrant ↔ SQLite ordering, stale file cleanup
-- [ ] **Phase 4** — Community detection + summarization (`graph/summarizer.py`)
+- [x] **Phase 4** — Louvain community detection, LLM-based community summarization with member-hash skip logic, community embedding store (`graph/summarizer.py`)
 - [ ] **Phase 5** — Local and global retrieval paths + CLI query interface
 - [ ] **Phase 6** — FastAPI web server with streaming
 
