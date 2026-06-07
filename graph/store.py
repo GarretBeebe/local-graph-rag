@@ -371,9 +371,16 @@ class GraphStore:
         self,
         entity_id: str,
         hops: int = ENTITY_NEIGHBORHOOD_HOPS,
+        *,
+        graph: nx.DiGraph | None = None,
     ) -> dict[str, Any]:
-        """Return entity rows and relationship rows within `hops` of entity_id."""
-        graph = self.build_networkx_graph()
+        """Return entity rows and relationship rows within `hops` of entity_id.
+
+        Pass a pre-built graph (from `build_networkx_graph`) to avoid rebuilding
+        it on every call when looking up neighborhoods for multiple entities.
+        """
+        if graph is None:
+            graph = self.build_networkx_graph()
         if entity_id not in graph:
             # Entity exists but has no relationships — look it up directly.
             row = self._conn.execute(
@@ -399,6 +406,22 @@ class GraphStore:
         return {
             "entities": [dict(row) for row in entity_rows],
             "relationships": [dict(row) for row in rel_rows],
+        }
+
+    def get_entity_neighborhoods(
+        self, entity_ids: list[str], hops: int = ENTITY_NEIGHBORHOOD_HOPS
+    ) -> dict[str, dict[str, Any]]:
+        """Return {entity_id: neighborhood} for each id, building the graph once.
+
+        Prefer this over calling get_entity_neighborhood in a loop — it avoids
+        rebuilding the relationships graph from scratch for every entity.
+        """
+        if not entity_ids:
+            return {}
+        graph = self.build_networkx_graph()
+        return {
+            entity_id: self.get_entity_neighborhood(entity_id, hops, graph=graph)
+            for entity_id in entity_ids
         }
 
     # ------------------------------------------------------------------

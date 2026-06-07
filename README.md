@@ -6,8 +6,9 @@ vector search to answer both specific and thematic questions.
 Runs entirely on local hardware via [Ollama](https://ollama.ai) and
 [Qdrant](https://qdrant.tech). No external API calls required.
 
-> **Status:** Phases 1–4 complete. The ingestion pipeline is functional and communities are
-> detected and summarized. Retrieval and the web interface are coming in Phases 5–6.
+> **Status:** Phases 1–5 complete. The ingestion pipeline is functional, communities are
+> detected and summarized, and local/global retrieval is wired up behind a CLI query interface.
+> The web interface is coming in Phase 6.
 > See [`context/GRAPH-RAG-PLAN.md`](context/GRAPH-RAG-PLAN.md) for the full implementation plan.
 
 ---
@@ -124,6 +125,23 @@ The summarizer is idempotent: it skips communities whose membership hasn't chang
 last run (tracked by a SHA-256 member hash). Run it after any indexer run that adds new
 documents.
 
+### Querying
+
+With Qdrant and Ollama running and at least one document indexed, ask questions directly from
+the CLI:
+
+```bash
+# Auto-routes between local (entity-specific) and global (thematic) retrieval
+uv run python -m api.query_graph_rag "What does GraphStore do?"
+
+# Force a specific retrieval mode: auto (default), local, or global
+uv run python -m api.query_graph_rag "What are the main themes in this codebase?" --mode global
+```
+
+`auto` mode classifies the question with `EXTRACT_MODEL` (falling back to a keyword heuristic
+if the LLM call fails or returns something unexpected) and picks local or global retrieval
+accordingly. Global mode falls back to local retrieval if no community summaries exist yet.
+
 ---
 
 ## Project Layout
@@ -135,10 +153,10 @@ local-graph-rag/
 ├── api/
 │   ├── embed.py              # Ollama embedding
 │   ├── ollama_client.py      # Ollama HTTP client
-│   ├── query_graph_rag.py    # Query entry point — local + global  (planned)
-│   ├── query_router.py       # Local vs. global classifier          (planned)
-│   ├── local_retrieval.py    # Entity lookup + graph traversal      (planned)
-│   └── global_retrieval.py   # Community summary retrieval          (planned)
+│   ├── query_graph_rag.py    # Query entry point — local + global, CLI
+│   ├── query_router.py       # Local vs. global classifier (LLM + heuristic fallback)
+│   ├── local_retrieval.py    # Entity lookup + graph traversal
+│   └── global_retrieval.py   # Community summary retrieval (cosine similarity)
 ├── graph/
 │   ├── store.py              # NetworkX + SQLite graph store
 │   ├── extractor.py          # LLM entity/relationship extraction
@@ -153,9 +171,12 @@ local-graph-rag/
 ├── web/
 │   └── api_server.py         # FastAPI server (OpenAI-compat)       (planned)
 ├── tests/
-│   ├── test_graph.py         # GraphStore + extractor unit tests
-│   ├── test_ingestion.py     # Fingerprint store + hash utility tests
-│   └── test_summarizer.py    # Community summarizer unit tests
+│   ├── test_graph.py             # GraphStore + extractor unit tests
+│   ├── test_ingestion.py         # Fingerprint store + hash utility tests
+│   ├── test_summarizer.py        # Community summarizer unit tests
+│   ├── test_retrieval.py         # Local + global retrieval unit tests
+│   ├── test_query_router.py      # Local/global routing unit tests
+│   └── test_query_graph_rag.py   # End-to-end query module tests
 ├── context/
 │   ├── GRAPH-RAG-PLAN.md     # Full architecture and implementation plan
 │   └── PHASE3-PUNCH-LIST.md  # Open data-integrity issues (findings 1–4)
@@ -170,7 +191,7 @@ local-graph-rag/
 - [x] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
 - [x] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, crash-safe Qdrant ↔ SQLite ordering, stale file cleanup
 - [x] **Phase 4** — Louvain community detection, LLM-based community summarization with member-hash skip logic, community embedding store (`graph/summarizer.py`)
-- [ ] **Phase 5** — Local and global retrieval paths + CLI query interface
+- [x] **Phase 5** — Local retrieval (vector search → entity neighborhood expansion), global retrieval (cosine similarity over community summaries), LLM query router with heuristic fallback, and a CLI query interface (`api/query_graph_rag.py`)
 - [ ] **Phase 6** — FastAPI web server with streaming
 
 ---
