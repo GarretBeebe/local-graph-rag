@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -76,6 +77,41 @@ def ensure_collection(client: QdrantClient) -> None:
     _collection_ensured = True
 
 
+# Below this length, word-boundary matches on common short tokens are mostly noise.
+_MIN_ENTITY_NAME_CHARS = 3
+
+
+def _match_entity_chunks(
+    chunks: list[str],
+    chunk_ids: list[str],
+    entities: list[dict],
+    entity_ids: list[str],
+) -> list[tuple[str, str]]:
+    """Pair each chunk with entities whose name appears in that chunk's text.
+
+    Word-boundary, case-insensitive matching: avoids "Go" matching inside
+    "Going"/"Embargo", and "GraphStore" matching inside "GraphStoreImpl" (no
+    `\\w`-boundary at that join point) the way plain substring search would.
+
+    Still a heuristic, not a resolver: it cannot unify spelling/spacing variants
+    ("GraphStore" vs "Graph Store"), aliases, pluralization, or entities the LLM
+    only referenced by pronoun/paraphrase. It is nonetheless strictly more precise
+    than linking every entity in the file to every chunk. Names shorter than
+    _MIN_ENTITY_NAME_CHARS are skipped outright — short tokens ("Go", "It", "C")
+    match constantly via word boundaries too and would poison links broadly.
+    """
+    pairs: list[tuple[str, str]] = []
+    for entity, entity_id in zip(entities, entity_ids, strict=True):
+        name = (entity.get("name") or "").strip()
+        if len(name) < _MIN_ENTITY_NAME_CHARS:
+            continue
+        pattern = re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+        for chunk_id, chunk_text in zip(chunk_ids, chunks, strict=True):
+            if pattern.search(chunk_text):
+                pairs.append((chunk_id, entity_id))
+    return pairs
+
+
 def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     """Process one file through the full pipeline. Returns 'indexed' | 'skipped' | 'failed'."""
     filepath = normalize_path(path)
@@ -117,22 +153,27 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
         for i, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True))
     ]
 
-    # SQLite register BEFORE Qdrant upsert: if Qdrant fails, IDs in SQLite for next retry
-    point_ids = [p.id for p in points]
-    store.register_chunks([(pid, filepath, i) for i, pid in enumerate(point_ids)])
-    client.upsert(collection_name=COLLECTION, points=points)
+    try:
+        # SQLite register BEFORE Qdrant upsert: if Qdrant fails, IDs in SQLite for next retry
+        point_ids = [p.id for p in points]
+        store.register_chunks([(pid, filepath, i) for i, pid in enumerate(point_ids)])
+        client.upsert(collection_name=COLLECTION, points=points)
 
-    result = extract_entities_for_file(chunks, filepath, store)
-    entity_ids = store.upsert_entities(result.entities)
-    store.upsert_relationships([
-        (slugify(rel["source"]), slugify(rel["target"]), rel["label"], filepath)
-        for rel in result.relationships
-    ])
+        result = extract_entities_for_file(chunks, filepath, store)
+        entity_ids = store.upsert_entities(result.entities)
+        store.upsert_relationships([
+            (slugify(rel["source"]), slugify(rel["target"]), rel["label"], filepath)
+            for rel in result.relationships
+        ])
 
-    store.link_chunks(point_ids, entity_ids)
-    # Write fingerprint last — crash before this line means the file has no fingerprint
-    # and will be retried on next run.
-    store.upsert_hash(filepath, current_hash)
+        store.link_chunks(_match_entity_chunks(chunks, point_ids, result.entities, entity_ids))
+        # Write fingerprint last — crash before this line means the file has no fingerprint
+        # and will be retried on next run.
+        store.upsert_hash(filepath, current_hash)
+    except Exception as e:
+        logger.error("Indexing failed for %s: %s", path, e)
+        return "failed"
+
     logger.info("Indexed %s: %d chunks, %d entities", path.name, len(points), len(entity_ids))
     return "indexed"
 

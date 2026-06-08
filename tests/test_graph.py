@@ -156,6 +156,28 @@ def test_delete_file_data_keeps_shared_entity(store: GraphStore):
     assert "shared" in ids
 
 
+def test_delete_file_data_keeps_entity_referenced_only_via_chunk_link(store: GraphStore):
+    """An entity with a relationship only in file_a, but chunk-linked from file_b too,
+    must survive deleting file_a — without raising IntegrityError.
+
+    Regression for the orphan-cleanup bug: chunk_entities.entity_id has no ON DELETE
+    clause and PRAGMA foreign_keys=ON is set, so deleting a still-chunk-linked entity
+    used to raise sqlite3.IntegrityError and roll back the whole delete_file_data
+    transaction rather than just mishandling the orphan check.
+    """
+    slug = store.upsert_entity("shared")
+    store.upsert_entity("other")
+    store.register_chunks([("c1", "file_a.py", 0), ("c2", "file_b.py", 0)])
+    store.upsert_relationship("shared", "other", "uses", "file_a.py")
+    store.link_chunks([("c2", slug)])
+
+    store.delete_file_data("file_a.py")  # must not raise IntegrityError
+
+    neighborhood = store.get_entity_neighborhood(slug, hops=0)
+    ids = [e["id"] for e in neighborhood["entities"]]
+    assert "shared" in ids
+
+
 def test_delete_file_data_returns_prior_chunk_ids(store: GraphStore):
     store.register_chunks([
         ("uuid-A", "target.py", 0),
@@ -184,6 +206,54 @@ def test_extraction_cache_clear(store: GraphStore):
     store.cache_extraction("foo.py", 0, "{}")
     store.clear_extraction_cache("foo.py")
     assert store.get_cached_extractions("foo.py") == {}
+
+
+# ---------------------------------------------------------------------------
+# GraphStore — detect_communities
+# ---------------------------------------------------------------------------
+
+
+def test_detect_communities_resets_stale_assignment_on_empty_graph(store: GraphStore):
+    """An entity with no relationships must lose a stale community on an empty graph.
+
+    build_networkx_graph only adds nodes via add_edge, so a graph with zero
+    relationships has zero nodes — detect_communities takes its early-exit branch
+    and never computes a partition. The reset must still run in that branch, or a
+    prior non-NULL community value is retained forever.
+    """
+    slug = store.upsert_entity("isolated")
+    store._conn.execute("UPDATE entities SET community = ? WHERE id = ?", (7, slug))
+    store._conn.commit()
+
+    store.detect_communities()
+
+    neighborhood = store.get_entity_neighborhood(slug, hops=0)
+    assert neighborhood["entities"][0]["community"] is None
+
+
+def test_detect_communities_resets_isolated_entity_in_nonempty_graph(store: GraphStore):
+    """An isolated entity must lose its stale community even when OTHER entities
+    form a non-empty graph and get freshly assigned.
+
+    Distinct code path from the empty-graph case: best_partition() runs and returns
+    a non-empty partition for the connected pair, but the isolated entity never
+    becomes a node (build_networkx_graph only adds nodes via add_edge) — so it's
+    absent from the partition and must be cleared by the reset, not left stale.
+    """
+    a = store.upsert_entity("connected_a")
+    store.upsert_entity("connected_b")
+    isolated = store.upsert_entity("isolated")
+    store.upsert_relationship("connected_a", "connected_b", "uses", "doc.py")
+    store._conn.execute("UPDATE entities SET community = ? WHERE id = ?", (7, isolated))
+    store._conn.commit()
+
+    store.detect_communities()
+
+    isolated_neighborhood = store.get_entity_neighborhood(isolated, hops=0)
+    assert isolated_neighborhood["entities"][0]["community"] is None
+
+    connected_neighborhood = store.get_entity_neighborhood(a, hops=0)
+    assert connected_neighborhood["entities"][0]["community"] is not None
 
 
 # ---------------------------------------------------------------------------

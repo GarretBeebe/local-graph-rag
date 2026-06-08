@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from graph.store import GraphStore
-from ingest.index_documents import _compute_hash
+from ingest.index_documents import _compute_hash, _match_entity_chunks
 
 # ---------------------------------------------------------------------------
 # GraphStore — fingerprints
@@ -71,3 +71,25 @@ def test_compute_hash_matches_sha256(tmp_path: Path):
     f.write_bytes(content)
     expected = hashlib.sha256(content).hexdigest()
     assert _compute_hash(f) == expected
+
+
+# ---------------------------------------------------------------------------
+# _match_entity_chunks
+# ---------------------------------------------------------------------------
+
+
+def test_match_entity_chunks_links_only_chunks_containing_name():
+    chunks = ["Alpha appears here.", "Nothing relevant in this one."]
+    pairs = _match_entity_chunks(chunks, ["c1", "c2"], [{"name": "Alpha"}], ["alpha"])
+    assert pairs == [("c1", "alpha")]
+
+
+def test_match_entity_chunks_uses_word_boundaries():
+    chunks = ["The Catalog feature shipped today.", "The cat sat on the mat."]
+    pairs = _match_entity_chunks(chunks, ["c1", "c2"], [{"name": "Cat"}], ["cat"])
+    assert pairs == [("c2", "cat")]  # not chunk c1 — "Cat" has no word boundary inside "Catalog"
+
+
+def test_match_entity_chunks_skips_short_names():
+    pairs = _match_entity_chunks(["C is a programming language."], ["c1"], [{"name": "C"}], ["c"])
+    assert pairs == []

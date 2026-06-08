@@ -64,7 +64,7 @@ def test_local_retrieve_deduplicates_entities(store, monkeypatch):
     # Two chunks both linked to the same entity
     slug = store.upsert_entity("Alpha", type="TYPE", description="desc")
     store.register_chunks([("c1", "doc.txt", 0), ("c2", "doc.txt", 1)])
-    store.link_chunks(["c1", "c2"], [slug])
+    store.link_chunks([("c1", slug), ("c2", slug)])
 
     client = _FakeQdrant([_FakePoint("c1"), _FakePoint("c2")])
     ctx = local_retrieve("q", store, client, hops=1)

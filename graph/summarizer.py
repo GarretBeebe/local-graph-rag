@@ -25,9 +25,24 @@ the key entities and their roles, and how they relate to each other.
 Summary:"""
 
 
-def _compute_member_hash(entity_ids: list[str]) -> str:
-    """Return SHA-256 of sorted entity slugs. Order-independent."""
-    joined = "\n".join(sorted(entity_ids))
+def _compute_member_hash(entities: list[dict], relationships: list[dict]) -> str:
+    """Return SHA-256 over entity membership/metadata and relationship topology.
+
+    Order-independent: each side is sorted before joining, so the same community
+    state always yields the same hash regardless of query result ordering.
+    Covers more than membership — entity type/description and relationship
+    endpoints/labels are included so a content-only change (e.g. a richer
+    description from re-extraction) invalidates the cached summary too.
+    """
+    entity_lines = sorted(
+        f"{e['id']}\x1f{e.get('type') or ''}\x1f{e.get('description') or ''}"
+        for e in entities
+    )
+    relationship_lines = sorted(
+        f"{r['source_id']}\x1f{r['target_id']}\x1f{r['label']}"
+        for r in relationships
+    )
+    joined = "\n".join(entity_lines + ["---"] + relationship_lines)
     return hashlib.sha256(joined.encode()).hexdigest()
 
 
@@ -64,7 +79,8 @@ def summarize_community(community_id: int, store: GraphStore, *, force: bool = F
         return False
 
     entity_ids = [e["id"] for e in entities]
-    new_hash = _compute_member_hash(entity_ids)
+    relationships = store.get_relationships_for_community(community_id)
+    new_hash = _compute_member_hash(entities, relationships)
 
     if not force:
         existing_row = store.get_community(community_id)
@@ -72,7 +88,6 @@ def summarize_community(community_id: int, store: GraphStore, *, force: bool = F
             logger.debug("Community %d unchanged — skipping", community_id)
             return False
 
-    relationships = store.get_relationships_for_community(community_id)
     prompt = _build_summary_prompt(entities, relationships)
 
     try:

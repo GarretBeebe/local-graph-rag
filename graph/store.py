@@ -220,14 +220,14 @@ class GraphStore:
         ).fetchall()
         return [row["chunk_id"] for row in rows]
 
-    def link_chunks(self, chunk_ids: list[str], entity_ids: list[str]) -> None:
-        """Link all chunk_ids to all entity_ids (cross-product) in one transaction."""
-        if not chunk_ids or not entity_ids:
+    def link_chunks(self, pairs: list[tuple[str, str]]) -> None:
+        """Insert (chunk_id, entity_id) link rows, ignoring duplicates."""
+        if not pairs:
             return
         with self._write():
             self._conn.executemany(
                 "INSERT OR IGNORE INTO chunk_entities (chunk_id, entity_id) VALUES (?, ?)",
-                [(cid, eid) for cid in chunk_ids for eid in entity_ids],
+                pairs,
             )
 
     def get_entities_by_chunk_ids(self, chunk_ids: list[str]) -> list[str]:
@@ -266,6 +266,8 @@ class GraphStore:
                 "  SELECT source_id FROM relationships"
                 "  UNION"
                 "  SELECT target_id FROM relationships"
+                "  UNION"
+                "  SELECT entity_id FROM chunk_entities"
                 ")"
             )
         return prior_ids
@@ -346,26 +348,40 @@ class GraphStore:
         return graph
 
     def detect_communities(self) -> None:
-        """Run Louvain community detection and write community IDs back to entities."""
+        """Run Louvain community detection and write community IDs back to entities.
+
+        Always clears existing assignments first, in the same transaction as any
+        new ones, so entities that fall out of the graph — including the
+        empty-graph case where no partition is computed at all — don't retain a
+        stale community ID from a previous run.
+        """
         if community_louvain is None:
             raise RuntimeError(
                 "python-louvain is not installed; run `uv add python-louvain`"
             )
         graph = self.build_networkx_graph()
+        partition: dict[str, int] = {}
         if len(graph.nodes) == 0:
-            logger.warning("detect_communities: graph is empty, skipping")
-            return
-        partition: dict[str, int] = community_louvain.best_partition(graph.to_undirected())
-        with self._write():
-            self._conn.executemany(
-                "UPDATE entities SET community = ? WHERE id = ?",
-                [(comm_id, entity_id) for entity_id, comm_id in partition.items()],
+            logger.warning(
+                "detect_communities: graph is empty — clearing all community assignments"
             )
-        logger.info(
-            "detect_communities: assigned %d entities to %d communities",
-            len(partition),
-            len(set(partition.values())),
-        )
+        else:
+            partition = community_louvain.best_partition(graph.to_undirected())
+
+        with self._write():
+            self._conn.execute("UPDATE entities SET community = NULL")
+            if partition:
+                self._conn.executemany(
+                    "UPDATE entities SET community = ? WHERE id = ?",
+                    [(comm_id, entity_id) for entity_id, comm_id in partition.items()],
+                )
+
+        if partition:
+            logger.info(
+                "detect_communities: assigned %d entities to %d communities",
+                len(partition),
+                len(set(partition.values())),
+            )
 
     def get_entity_neighborhood(
         self,

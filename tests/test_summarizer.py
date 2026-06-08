@@ -28,12 +28,38 @@ def _add_entity_in_community(store: GraphStore, name: str, community: int) -> st
 _ZERO_EMBEDDING = b"\x00" * (768 * 4)
 
 
-def test_member_hash_stable_and_order_independent():
-    h1 = _compute_member_hash(["b", "a", "c"])
-    h2 = _compute_member_hash(["a", "c", "b"])
+def test_member_hash_order_independent():
+    entities = [
+        {"id": "a", "type": "T", "description": "desc-a"},
+        {"id": "b", "type": "T", "description": "desc-b"},
+    ]
+    relationships = [{"source_id": "a", "target_id": "b", "label": "uses"}]
+    h1 = _compute_member_hash(entities, relationships)
+    h2 = _compute_member_hash(list(reversed(entities)), list(reversed(relationships)))
     assert h1 == h2
-    assert h1 == _compute_member_hash(["c", "b", "a"])
-    assert _compute_member_hash(["a", "b"]) != _compute_member_hash(["a", "b", "c"])
+
+
+def test_member_hash_changes_with_membership():
+    base = [{"id": "a", "type": "T", "description": "desc-a"}]
+    extra = base + [{"id": "b", "type": "T", "description": "desc-b"}]
+    assert _compute_member_hash(base, []) != _compute_member_hash(extra, [])
+
+
+def test_member_hash_changes_with_entity_metadata():
+    e1 = [{"id": "a", "type": "T", "description": "old description"}]
+    e2 = [{"id": "a", "type": "T", "description": "new, richer description"}]
+    assert _compute_member_hash(e1, []) != _compute_member_hash(e2, [])
+
+
+def test_member_hash_changes_with_relationship_topology():
+    entities = [
+        {"id": "a", "type": "T", "description": "desc-a"},
+        {"id": "b", "type": "T", "description": "desc-b"},
+    ]
+    r1 = [{"source_id": "a", "target_id": "b", "label": "uses"}]
+    r2 = [{"source_id": "a", "target_id": "b", "label": "extends"}]
+    assert _compute_member_hash(entities, r1) != _compute_member_hash(entities, r2)
+    assert _compute_member_hash(entities, r1) != _compute_member_hash(entities, [])
 
 
 def test_summarize_community_skips_empty_community(store):
@@ -42,7 +68,9 @@ def test_summarize_community_skips_empty_community(store):
 
 def test_summarize_community_skips_unchanged(store, monkeypatch):
     slug = _add_entity_in_community(store, "Alpha", 0)
-    member_hash = _compute_member_hash([slug])
+    entities = store.get_entities_for_community(0)
+    relationships = store.get_relationships_for_community(0)
+    member_hash = _compute_member_hash(entities, relationships)
     store.upsert_community(0, "existing summary", [slug], member_hash, _ZERO_EMBEDDING)
 
     generate_calls = []
