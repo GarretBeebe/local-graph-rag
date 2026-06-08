@@ -124,10 +124,13 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     if current_hash == stored_hash:
         return "skipped"
 
-    _delete_file(store, client, filepath)
-
-    if stored_hash is not None:
-        store.clear_extraction_cache(filepath)
+    try:
+        _delete_file(store, client, filepath)
+        if stored_hash is not None:
+            store.clear_extraction_cache(filepath)
+    except Exception as e:
+        logger.error("Cleanup before indexing failed for %s: %s", path, e)
+        return "failed"
 
     text = _read_file(path)
     if text is None:
