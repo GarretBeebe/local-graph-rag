@@ -107,17 +107,26 @@ def _validate_settings() -> None:
         raise ValueError(f"settings: OLLAMA_MAX_RETRIES must be >= 0, got {OLLAMA_MAX_RETRIES}")
     if CHUNK_OVERLAP < 0:
         raise ValueError(f"settings: CHUNK_OVERLAP must be >= 0, got {CHUNK_OVERLAP}")
+    for name, value in {
+        "MAX_CHAT_MESSAGES": MAX_CHAT_MESSAGES,
+        "MAX_CHAT_CONTENT_ITEMS": MAX_CHAT_CONTENT_ITEMS,
+        "MAX_CHAT_MESSAGE_CHARS": MAX_CHAT_MESSAGE_CHARS,
+        "MAX_CHAT_TOTAL_CHARS": MAX_CHAT_TOTAL_CHARS,
+        "MAX_CHAT_QUESTION_CHARS": MAX_CHAT_QUESTION_CHARS,
+        "MAX_MODEL_NAME_CHARS": MAX_MODEL_NAME_CHARS,
+        "MAX_INDEX_FILE_BYTES": MAX_INDEX_FILE_BYTES,
+        "SESSION_EXPIRY_HOURS": SESSION_EXPIRY_HOURS,
+    }.items():
+        _require_positive(name, value)
     if MAX_CHAT_QUESTION_CHARS > MAX_CHAT_TOTAL_CHARS:
         raise ValueError(
             f"settings: MAX_CHAT_QUESTION_CHARS must be <= MAX_CHAT_TOTAL_CHARS, "
             f"got {MAX_CHAT_QUESTION_CHARS} > {MAX_CHAT_TOTAL_CHARS}"
         )
-    # When MAX_CHAT_QUESTION_CHARS >= MAX_CHAT_MESSAGE_CHARS, the question-length check in
-    # extract_question_from_messages is unreachable (questions are bounded by the per-message
-    # limit first). Set MAX_CHAT_QUESTION_CHARS < MAX_CHAT_MESSAGE_CHARS to make it active.
-    if MAX_CHAT_QUESTION_CHARS < MAX_CHAT_MESSAGE_CHARS and MAX_CHAT_QUESTION_CHARS <= 0:
+    if MAX_CHAT_TOTAL_CHARS < MAX_CHAT_MESSAGE_CHARS:
         raise ValueError(
-            f"settings: MAX_CHAT_QUESTION_CHARS must be > 0, got {MAX_CHAT_QUESTION_CHARS}"
+            f"settings: MAX_CHAT_TOTAL_CHARS must be >= MAX_CHAT_MESSAGE_CHARS, "
+            f"got {MAX_CHAT_TOTAL_CHARS} < {MAX_CHAT_MESSAGE_CHARS}"
         )
     if CHUNK_OVERLAP >= CHUNK_SIZE:
         raise ValueError(

@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _ALLOWED = normalize_extensions(ALLOWED_EXTENSIONS)
 _collection_ensured = False
 _DOCS_ROOT = DOCS_PATH.resolve()
+_HASH_READ_BLOCK_BYTES = 65536
 
 
 def _is_safe_indexable_file(path: Path) -> bool:
@@ -60,7 +61,7 @@ def _compute_hash(path: Path) -> str:
     """Return SHA-256 hex digest of a file, reading in 64 KB blocks."""
     h = hashlib.sha256()
     with path.open("rb") as f:
-        for block in iter(lambda: f.read(65536), b""):
+        for block in iter(lambda: f.read(_HASH_READ_BLOCK_BYTES), b""):
             h.update(block)
     return h.hexdigest()
 
@@ -144,11 +145,38 @@ def _match_entity_chunks(
     return pairs
 
 
+def _write_index_data(
+    filepath: str,
+    chunks: list[str],
+    points: list[PointStruct],
+    store: GraphStore,
+    client: QdrantClient,
+    current_hash: str,
+) -> int:
+    """Register chunks, upsert to Qdrant, write graph data. Returns entity count.
+
+    SQLite chunk IDs registered BEFORE Qdrant upsert: if Qdrant fails, IDs survive
+    in SQLite for retry. Fingerprint written last — a crash before that line leaves no
+    fingerprint so the file is retried on the next run.
+    """
+    point_ids = [p.id for p in points]
+    store.register_chunks([(pid, filepath, i) for i, pid in enumerate(point_ids)])
+    client.upsert(collection_name=COLLECTION, points=points)
+    result = extract_entities_for_file(chunks, filepath, store)
+    entity_ids = store.upsert_entities(result.entities)
+    store.upsert_relationships([
+        (slugify(rel["source"]), slugify(rel["target"]), rel["label"], filepath)
+        for rel in result.relationships
+    ])
+    store.link_chunks(_match_entity_chunks(chunks, point_ids, result.entities, entity_ids))
+    store.upsert_hash(filepath, current_hash)
+    return len(entity_ids)
+
+
 def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     """Process one file through the full pipeline. Returns 'indexed' | 'skipped' | 'failed'."""
     filepath = normalize_path(path)
 
-    # Hash-only pass: no text buffered, so unchanged files skip immediately
     current_hash = _hash_file(path)
     if current_hash is None:
         return "failed"
@@ -189,27 +217,12 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     ]
 
     try:
-        # SQLite register BEFORE Qdrant upsert: if Qdrant fails, IDs in SQLite for next retry
-        point_ids = [p.id for p in points]
-        store.register_chunks([(pid, filepath, i) for i, pid in enumerate(point_ids)])
-        client.upsert(collection_name=COLLECTION, points=points)
-
-        result = extract_entities_for_file(chunks, filepath, store)
-        entity_ids = store.upsert_entities(result.entities)
-        store.upsert_relationships([
-            (slugify(rel["source"]), slugify(rel["target"]), rel["label"], filepath)
-            for rel in result.relationships
-        ])
-
-        store.link_chunks(_match_entity_chunks(chunks, point_ids, result.entities, entity_ids))
-        # Write fingerprint last — crash before this line means the file has no fingerprint
-        # and will be retried on next run.
-        store.upsert_hash(filepath, current_hash)
+        n_entities = _write_index_data(filepath, chunks, points, store, client, current_hash)
     except Exception as e:
         logger.error("Indexing failed for %s: %s", path, e)
         return "failed"
 
-    logger.info("Indexed %s: %d chunks, %d entities", path.name, len(points), len(entity_ids))
+    logger.info("Indexed %s: %d chunks, %d entities", path.name, len(points), n_entities)
     return "indexed"
 
 
