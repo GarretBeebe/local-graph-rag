@@ -9,19 +9,23 @@ import bcrypt as _bcrypt
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
-import api.ollama_client as ollama_client
-from settings import (
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.settings import (
     ALLOW_INSECURE_LOCALONLY,
     GEN_MODEL,
     OLLAMA_MODEL_LIST_TIMEOUT_SECONDS,
     SESSION_EXPIRY_HOURS,
 )
-from web import user_store
-from web.auth import create_session, is_valid_token, revoke_session
-from web.middleware import _AUTH_COOKIE, _extract_bearer_token, _is_secure_request
-from web.openai_compat import build_chat_response, model_entry
-from web.rag_executor import get_rag_executor, rag_stream_response, run_rag_with_timeout
-from web.schemas import (
+from local_graph_rag.web import user_store
+from local_graph_rag.web.auth import create_session, is_valid_token, revoke_session
+from local_graph_rag.web.middleware import _AUTH_COOKIE, _extract_bearer_token, _is_secure_request
+from local_graph_rag.web.openai_compat import build_chat_response, model_entry
+from local_graph_rag.web.rag_executor import (
+    get_rag_executor,
+    rag_stream_response,
+    run_rag_with_timeout,
+)
+from local_graph_rag.web.schemas import (
     ChatRequest,
     LoginRequest,
     extract_question_from_messages,

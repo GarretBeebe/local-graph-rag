@@ -8,7 +8,7 @@ Defaults assume a local install with Ollama and Qdrant on localhost.
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 DOCS_PATH = Path(os.environ.get("DOCS_PATH", str(PROJECT_ROOT / "documents")))
 SQLITE_PATH = Path(os.environ.get("SQLITE_PATH", str(DATA_DIR / "graph.db")))

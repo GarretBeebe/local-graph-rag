@@ -10,13 +10,19 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
 from tqdm import tqdm
 
-from api.embed import embed_batch
-from common.paths import has_allowed_extension, normalize_extensions, normalize_path
-from common.qdrant import get_qdrant_client
-from graph.extractor import extract_entities_for_file
-from graph.store import GraphStore, slugify
-from ingest.chunkers import chunk_document
-from settings import ALLOWED_EXTENSIONS, COLLECTION, DOCS_PATH, MAX_INDEX_FILE_BYTES, VECTOR_SIZE
+from local_graph_rag.common.paths import has_allowed_extension, normalize_extensions, normalize_path
+from local_graph_rag.common.qdrant import get_qdrant_client
+from local_graph_rag.graph.extractor import extract_entities_for_file
+from local_graph_rag.graph.store import GraphStore, slugify
+from local_graph_rag.ingest.chunkers import chunk_document
+from local_graph_rag.rag.embed import embed_batch
+from local_graph_rag.settings import (
+    ALLOWED_EXTENSIONS,
+    COLLECTION,
+    DOCS_PATH,
+    MAX_INDEX_FILE_BYTES,
+    VECTOR_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from settings import (
+from local_graph_rag.settings import (
     MAX_CHAT_CONTENT_ITEMS,
     MAX_CHAT_MESSAGE_CHARS,
     MAX_CHAT_MESSAGES,

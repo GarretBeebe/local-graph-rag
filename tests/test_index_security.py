@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import ingest.index_documents as _mod
-from ingest.index_documents import _is_safe_indexable_file, _is_within_size_limit
+import local_graph_rag.ingest.index_documents as _mod
+from local_graph_rag.ingest.index_documents import _is_safe_indexable_file, _is_within_size_limit
 
 
 @pytest.fixture(autouse=True)

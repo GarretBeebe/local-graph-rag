@@ -17,7 +17,7 @@ import ast
 import re
 from pathlib import Path
 
-from settings import CHUNK_OVERLAP, CHUNK_SIZE, MAX_CHUNK_CHARS, MAX_MD_CHUNK
+from local_graph_rag.settings import CHUNK_OVERLAP, CHUNK_SIZE, MAX_CHUNK_CHARS, MAX_MD_CHUNK
 
 _SEPARATORS = ["\n\n", "\n", " ", ""]
 

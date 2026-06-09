@@ -6,10 +6,10 @@ import sys
 
 import numpy as np
 
-import api.ollama_client as ollama_client
-from api.embed import embed
-from graph.store import GraphStore
-from settings import SUMMARIZE_MODEL
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.rag.embed import embed
+from local_graph_rag.settings import SUMMARIZE_MODEL
 
 logger = logging.getLogger(__name__)
 

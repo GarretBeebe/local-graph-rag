@@ -2,8 +2,8 @@
 
 import pytest
 
-from graph.store import GraphStore
-from graph.summarizer import (
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.graph.summarizer import (
     _build_summary_prompt,
     _compute_member_hash,
     summarize_community,
@@ -79,8 +79,8 @@ def test_summarize_community_skips_unchanged(store, monkeypatch):
         generate_calls.append(a)
         return "x"
 
-    monkeypatch.setattr("api.ollama_client.generate", _fake_generate)
-    monkeypatch.setattr("graph.summarizer.embed", lambda *a, **kw: [0.0] * 768)
+    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+    monkeypatch.setattr("local_graph_rag.graph.summarizer.embed", lambda *a, **kw: [0.0] * 768)
 
     assert summarize_community(0, store) is False
     assert len(generate_calls) == 0
@@ -90,8 +90,11 @@ def test_summarize_community_regenerates_on_membership_change(store, monkeypatch
     slug = _add_entity_in_community(store, "Beta", 0)
     store.upsert_community(0, "old summary", [slug], "stale_hash" * 4, _ZERO_EMBEDDING)
 
-    monkeypatch.setattr("api.ollama_client.generate", lambda *a, **kw: "new summary")
-    monkeypatch.setattr("graph.summarizer.embed", lambda *a, **kw: [0.1] * 768)
+    monkeypatch.setattr(
+        "local_graph_rag.rag.ollama_client.generate",
+        lambda *a, **kw: "new summary",
+    )
+    monkeypatch.setattr("local_graph_rag.graph.summarizer.embed", lambda *a, **kw: [0.1] * 768)
 
     assert summarize_community(0, store) is True
     communities = store.get_communities()

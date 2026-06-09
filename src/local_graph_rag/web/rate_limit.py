@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections import defaultdict
 
-from settings import RATE_MAX_LOGIN_REQUESTS, RATE_MAX_REQUESTS, RATE_WINDOW_SECONDS
+from local_graph_rag.settings import RATE_MAX_LOGIN_REQUESTS, RATE_MAX_REQUESTS, RATE_WINDOW_SECONDS
 
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
 _login_rate_buckets: dict[str, list[float]] = defaultdict(list)

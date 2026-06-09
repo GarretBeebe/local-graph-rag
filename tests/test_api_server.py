@@ -8,14 +8,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from common.sqlite_store import SqliteStore
+from local_graph_rag.common.sqlite_store import SqliteStore
 
 _TEST_API_KEY = "test-bearer-key-abc"
 
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limits():
-    import web.rate_limit as rl
+    import local_graph_rag.web.rate_limit as rl
 
     rl._rate_buckets.clear()
     rl._login_rate_buckets.clear()
@@ -36,14 +36,14 @@ def _client_ctx(
     mock_store = MagicMock()
     mock_qdrant = MagicMock()
     with (
-        patch("web.api_server.GraphStore", return_value=mock_store),
-        patch("web.api_server.get_qdrant_client", return_value=mock_qdrant),
-        patch("web.middleware.ALLOW_INSECURE_LOCALONLY", insecure),
-        patch("web.routes.ALLOW_INSECURE_LOCALONLY", insecure),
-        patch("web.auth.API_KEY", api_key),
-        patch("web.user_store._store", temp_user_store),
+        patch("local_graph_rag.web.api_server.GraphStore", return_value=mock_store),
+        patch("local_graph_rag.web.api_server.get_qdrant_client", return_value=mock_qdrant),
+        patch("local_graph_rag.web.middleware.ALLOW_INSECURE_LOCALONLY", insecure),
+        patch("local_graph_rag.web.routes.ALLOW_INSECURE_LOCALONLY", insecure),
+        patch("local_graph_rag.web.auth.API_KEY", api_key),
+        patch("local_graph_rag.web.user_store._store", temp_user_store),
     ):
-        from web.api_server import app
+        from local_graph_rag.web.api_server import app
         with TestClient(app, raise_server_exceptions=False) as client:
             yield client
 
@@ -127,7 +127,7 @@ def test_models_no_token_returns_401(authed_client):
 
 
 def test_models_valid_bearer_returns_list(authed_client):
-    with patch("web.routes.ollama_client.get") as mock_get:
+    with patch("local_graph_rag.web.routes.ollama_client.get") as mock_get:
         mock_get.return_value.raise_for_status = MagicMock()
         mock_get.return_value.json.return_value = {"models": [{"name": "test-model"}]}
         res = authed_client.get(
@@ -170,7 +170,7 @@ def test_chat_missing_user_message_returns_400(insecure_client):
 
 def test_chat_graph_mode_defaults_to_auto(insecure_client):
     """graph_mode defaults to 'auto' when not specified."""
-    with patch("web.rag_executor.ask") as mock_ask:
+    with patch("local_graph_rag.web.rag_executor.ask") as mock_ask:
         mock_ask.return_value = "answer"
         res = insecure_client.post(
             "/v1/chat/completions",
@@ -182,7 +182,7 @@ def test_chat_graph_mode_defaults_to_auto(insecure_client):
 
 def test_chat_explicit_graph_mode_is_forwarded(insecure_client):
     """graph_mode value is passed through to ask()."""
-    with patch("web.rag_executor.ask") as mock_ask:
+    with patch("local_graph_rag.web.rag_executor.ask") as mock_ask:
         mock_ask.return_value = "answer"
         insecure_client.post(
             "/v1/chat/completions",

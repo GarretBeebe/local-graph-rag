@@ -19,6 +19,12 @@ dependencies = [
     "bcrypt",
 ]
 
+[project.scripts]
+graph-rag-users = "local_graph_rag.cli.manage_users:main"
+graph-rag-query = "local_graph_rag.rag.query_graph_rag:main"
+graph-rag-index = "local_graph_rag.ingest.index_documents:main"
+graph-rag-summarize = "local_graph_rag.graph.summarizer:main"
+
 [dependency-groups]
 dev = [
     "pytest",
@@ -27,8 +33,13 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["settings"]
-packages = ["api", "graph", "ingest", "common", "web"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+local_graph_rag = ["web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

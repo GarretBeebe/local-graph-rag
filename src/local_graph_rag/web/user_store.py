@@ -8,8 +8,8 @@ which is persisted via the graph-data Docker volume.
 import secrets
 import time
 
-from common.sqlite_store import SqliteStore
-from settings import DATA_DIR
+from local_graph_rag.common.sqlite_store import SqliteStore
+from local_graph_rag.settings import DATA_DIR
 
 DB_PATH = DATA_DIR / "users.sqlite3"
 _store = SqliteStore(DB_PATH)

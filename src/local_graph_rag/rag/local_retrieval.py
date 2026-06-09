@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 
 from qdrant_client import QdrantClient
 
-from api.embed import embed
-from graph.store import GraphStore
-from settings import COLLECTION, ENTITY_NEIGHBORHOOD_HOPS, ENTITY_RETRIEVAL_K
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.rag.embed import embed
+from local_graph_rag.settings import COLLECTION, ENTITY_NEIGHBORHOOD_HOPS, ENTITY_RETRIEVAL_K
 
 logger = logging.getLogger(__name__)
 

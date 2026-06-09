@@ -3,7 +3,7 @@ OpenAI-compatible chat completions endpoint backed by the local Graph RAG pipeli
 
 Run with:
 
-    uvicorn web.api_server:app --host 0.0.0.0 --port 8000
+    uvicorn local_graph_rag.web.api_server:app --host 0.0.0.0 --port 8000
 """
 
 import asyncio
@@ -16,19 +16,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from common.qdrant import get_qdrant_client
-from graph.store import GraphStore
-from settings import (
+from local_graph_rag.common.qdrant import get_qdrant_client
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.settings import (
     ALLOW_INSECURE_LOCALONLY,
     CORS_ORIGINS,
     GENERATION_CONCURRENCY_LIMIT,
     RAG_EXECUTOR_WORKERS,
 )
-from web import user_store
-from web.middleware import security_headers_middleware, security_middleware
-from web.rag_executor import init_rag_executor, init_stores, shutdown_rag_executor
-from web.rate_limit import start_sweep_tasks
-from web.routes import router
+from local_graph_rag.web import user_store
+from local_graph_rag.web.middleware import security_headers_middleware, security_middleware
+from local_graph_rag.web.rag_executor import init_rag_executor, init_stores, shutdown_rag_executor
+from local_graph_rag.web.rate_limit import start_sweep_tasks
+from local_graph_rag.web.routes import router
 
 logger = logging.getLogger(__name__)
 

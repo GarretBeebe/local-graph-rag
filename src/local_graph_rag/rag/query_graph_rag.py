@@ -8,12 +8,12 @@ from typing import Literal
 
 from qdrant_client import QdrantClient
 
-import api.ollama_client as ollama_client
-from api.global_retrieval import GlobalContext, global_retrieve
-from api.local_retrieval import LocalContext, local_retrieve
-from api.query_router import route_query
-from graph.store import GraphStore
-from settings import GEN_MODEL
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.rag.global_retrieval import GlobalContext, global_retrieve
+from local_graph_rag.rag.local_retrieval import LocalContext, local_retrieve
+from local_graph_rag.rag.query_router import route_query
+from local_graph_rag.settings import GEN_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 
     if len(sys.argv) < 2:
-        print("Usage: python -m api.query_graph_rag <question> [--mode local|global|auto]")
+        print(
+            "Usage: python -m local_graph_rag.rag.query_graph_rag "
+            "<question> [--mode local|global|auto]"
+        )
         sys.exit(1)
 
     question = sys.argv[1]
@@ -152,7 +155,7 @@ def main() -> None:
             print("Error: --mode requires a value (auto, local, or global)")
             sys.exit(1)
 
-    from common.qdrant import get_qdrant_client
+    from local_graph_rag.common.qdrant import get_qdrant_client
 
     store = GraphStore()
     client = get_qdrant_client()

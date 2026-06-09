@@ -2,8 +2,8 @@
 
 import hmac
 
-from settings import API_KEY, SESSION_EXPIRY_HOURS
-from web import user_store
+from local_graph_rag.settings import API_KEY, SESSION_EXPIRY_HOURS
+from local_graph_rag.web import user_store
 
 
 def create_session(username: str) -> str:

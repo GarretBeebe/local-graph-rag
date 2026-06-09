@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from graph.extractor import ExtractionResult, _parse_extraction_response
-from graph.store import GraphStore, slugify
+from local_graph_rag.graph.extractor import ExtractionResult, _parse_extraction_response
+from local_graph_rag.graph.store import GraphStore, slugify
 
 # ---------------------------------------------------------------------------
 # slugify
@@ -21,7 +21,7 @@ def test_slugify_replaces_spaces():
 
 
 def test_slugify_replaces_special_chars():
-    assert slugify("api.embed") == "api_embed"
+    assert slugify("rag.embed") == "rag_embed"
 
 
 def test_slugify_strips_leading_trailing_underscores():

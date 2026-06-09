@@ -7,8 +7,13 @@ in contexts that only need embedding (e.g. batch indexing).
 
 import logging
 
-import api.ollama_client as ollama_client
-from settings import EMBED_MODEL, MAX_EMBED_CHARS, OLLAMA_EMBED_TIMEOUT_SECONDS, VECTOR_SIZE
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.settings import (
+    EMBED_MODEL,
+    MAX_EMBED_CHARS,
+    OLLAMA_EMBED_TIMEOUT_SECONDS,
+    VECTOR_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 

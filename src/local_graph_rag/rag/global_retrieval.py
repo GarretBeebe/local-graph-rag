@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from api.embed import embed
-from graph.store import GraphStore
-from settings import COMMUNITY_RETRIEVAL_N
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.rag.embed import embed
+from local_graph_rag.settings import COMMUNITY_RETRIEVAL_N
 
 logger = logging.getLogger(__name__)
 

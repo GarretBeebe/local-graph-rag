@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from graph.store import GraphStore
-from ingest.index_documents import _compute_hash, _match_entity_chunks
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.ingest.index_documents import _compute_hash, _match_entity_chunks
 
 # ---------------------------------------------------------------------------
 # GraphStore — fingerprints

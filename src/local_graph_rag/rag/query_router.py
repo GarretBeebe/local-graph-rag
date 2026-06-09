@@ -5,8 +5,8 @@ import re
 import threading
 from typing import Literal
 
-import api.ollama_client as ollama_client
-from settings import EXTRACT_MODEL
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.settings import EXTRACT_MODEL
 
 logger = logging.getLogger(__name__)
 

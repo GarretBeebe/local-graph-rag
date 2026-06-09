@@ -16,7 +16,7 @@ try:
 except ImportError:
     community_louvain = None  # type: ignore[assignment]
 
-from settings import ENTITY_NEIGHBORHOOD_HOPS, SQLITE_PATH
+from local_graph_rag.settings import ENTITY_NEIGHBORHOOD_HOPS, SQLITE_PATH
 
 logger = logging.getLogger(__name__)
 

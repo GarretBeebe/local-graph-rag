@@ -1,9 +1,9 @@
 """User management CLI for the Graph RAG web server.
 
 Usage:
-    uv run python manage_users.py add <username> <password>
-    uv run python manage_users.py remove <username>
-    uv run python manage_users.py list
+    uv run graph-rag-users add <username> <password>
+    uv run graph-rag-users remove <username>
+    uv run graph-rag-users list
 """
 
 import argparse
@@ -11,7 +11,7 @@ import sys
 
 import bcrypt
 
-from web.user_store import delete_user, init_db, list_users, upsert_user
+from local_graph_rag.web.user_store import delete_user, init_db, list_users, upsert_user
 
 
 def main() -> None:

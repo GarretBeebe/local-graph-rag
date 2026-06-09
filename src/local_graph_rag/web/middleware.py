@@ -9,9 +9,9 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
-from settings import ALLOW_INSECURE_LOCALONLY, TRUSTED_PROXY_IPS
-from web.auth import is_valid_token
-from web.rate_limit import check_login_rate_limit, check_rate_limit
+from local_graph_rag.settings import ALLOW_INSECURE_LOCALONLY, TRUSTED_PROXY_IPS
+from local_graph_rag.web.auth import is_valid_token
+from local_graph_rag.web.rate_limit import check_login_rate_limit, check_rate_limit
 
 logger = logging.getLogger(__name__)
 

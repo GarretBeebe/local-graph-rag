@@ -14,11 +14,15 @@ from typing import Any, TypeVar
 from fastapi import HTTPException, Request
 from qdrant_client import QdrantClient
 
-import api.ollama_client as ollama_client
-from api.query_graph_rag import ask, ask_stream_sync
-from graph.store import GraphStore
-from settings import RAG_EXECUTOR_WORKERS, RAG_REQUEST_TIMEOUT_SECONDS, STREAM_TIMEOUT_SECONDS
-from web.openai_compat import make_stream_chunk
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.rag.query_graph_rag import ask, ask_stream_sync
+from local_graph_rag.settings import (
+    RAG_EXECUTOR_WORKERS,
+    RAG_REQUEST_TIMEOUT_SECONDS,
+    STREAM_TIMEOUT_SECONDS,
+)
+from local_graph_rag.web.openai_compat import make_stream_chunk
 
 logger = logging.getLogger(__name__)
 

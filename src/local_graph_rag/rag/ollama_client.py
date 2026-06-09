@@ -11,7 +11,7 @@ from typing import Any
 import requests
 from requests import RequestException
 
-from settings import (
+from local_graph_rag.settings import (
     GENERATION_CONCURRENCY_LIMIT,
     OLLAMA_BASE_URL,
     OLLAMA_GENERATE_TIMEOUT_SECONDS,

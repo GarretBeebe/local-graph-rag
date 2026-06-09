@@ -4,7 +4,7 @@ import threading
 
 from qdrant_client import QdrantClient
 
-from settings import QDRANT_API_KEY, QDRANT_HOST, QDRANT_PORT
+from local_graph_rag.settings import QDRANT_API_KEY, QDRANT_HOST, QDRANT_PORT
 
 _qdrant_client: QdrantClient | None = None
 _qdrant_lock = threading.Lock()

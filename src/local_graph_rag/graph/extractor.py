@@ -5,9 +5,9 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-import api.ollama_client as ollama_client
-from graph.store import GraphStore, slugify
-from settings import EXTRACT_BATCH_TOKENS, EXTRACT_MODEL
+import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.graph.store import GraphStore, slugify
+from local_graph_rag.settings import EXTRACT_BATCH_TOKENS, EXTRACT_MODEL
 
 logger = logging.getLogger(__name__)
 

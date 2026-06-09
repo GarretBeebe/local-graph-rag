@@ -8,7 +8,7 @@ Runs entirely on local hardware via [Ollama](https://ollama.ai) and
 
 > **Status:** Phases 1–6 complete. Ingestion pipeline, community detection, local/global
 > retrieval, and the OpenAI-compatible web server with full auth are all operational.
-> See [`context/GRAPH-RAG-PLAN.md`](context/GRAPH-RAG-PLAN.md) for the full implementation plan.
+> See [`docs/planning/graph-rag-plan.md`](docs/planning/graph-rag-plan.md) for the full implementation plan.
 
 ---
 
@@ -117,7 +117,7 @@ docker compose --profile indexer run --rm indexer
 docker compose --profile summarizer run --rm summarizer
 
 # Re-run with --force to regenerate all summaries even if membership is unchanged
-docker compose --profile summarizer run --rm summarizer python -m graph.summarizer --force
+docker compose --profile summarizer run --rm summarizer graph-rag-summarize --force
 ```
 
 The summarizer is idempotent: it skips communities whose membership hasn't changed since the
@@ -131,7 +131,7 @@ documents.
 docker compose up -d api
 
 # Or run locally during development
-uv run uvicorn web.api_server:app --host 0.0.0.0 --port 8000
+uv run uvicorn local_graph_rag.web.api_server:app --host 0.0.0.0 --port 8000
 ```
 
 ### User management
@@ -139,9 +139,9 @@ uv run uvicorn web.api_server:app --host 0.0.0.0 --port 8000
 Before connecting a browser-based client, create at least one user:
 
 ```bash
-uv run python manage_users.py add alice mypassword
-uv run python manage_users.py list
-uv run python manage_users.py remove alice
+uv run graph-rag-users add alice mypassword
+uv run graph-rag-users list
+uv run graph-rag-users remove alice
 ```
 
 Users are stored in `data/users.sqlite3`. All sessions for a user are revoked when their
@@ -166,10 +166,10 @@ With Qdrant and Ollama running and at least one document indexed:
 
 ```bash
 # Auto-routes between local (entity-specific) and global (thematic) retrieval
-uv run python -m api.query_graph_rag "What does GraphStore do?"
+uv run graph-rag-query "What does GraphStore do?"
 
 # Force a specific retrieval mode: auto (default), local, or global
-uv run python -m api.query_graph_rag "What are the main themes in this codebase?" --mode global
+uv run graph-rag-query "What are the main themes in this codebase?" --mode global
 ```
 
 `auto` mode classifies the question with `EXTRACT_MODEL` (falling back to a keyword heuristic
@@ -182,33 +182,38 @@ accordingly. Global mode falls back to local retrieval if no community summaries
 
 ```
 local-graph-rag/
-├── api/
-│   ├── embed.py              # Ollama embedding
-│   ├── ollama_client.py      # Ollama HTTP client
-│   ├── query_graph_rag.py    # Query entry point — local + global, CLI
-│   ├── query_router.py       # Local vs. global classifier (LLM + heuristic fallback)
-│   ├── local_retrieval.py    # Entity lookup + graph traversal
-│   └── global_retrieval.py   # Community summary retrieval (cosine similarity)
-├── graph/
-│   ├── store.py              # NetworkX + SQLite graph store
-│   ├── extractor.py          # LLM entity/relationship extraction
-│   └── summarizer.py         # Louvain community detection + LLM summarization
-├── ingest/
-│   ├── chunkers.py           # Document chunking
-│   └── index_documents.py    # Full ingestion pipeline
-├── common/
-│   ├── config.py             # YAML config loader
-│   ├── paths.py              # Path normalization
-│   ├── qdrant.py             # Qdrant client singleton
-│   └── sqlite_store.py       # Thread-local SQLite connection wrapper
-├── web/
-│   ├── api_server.py         # FastAPI server (OpenAI-compat, streaming, auth middleware)
-│   ├── auth.py               # Session token + API key validation
-│   ├── user_store.py         # bcrypt user store (SQLite-backed)
-│   ├── rate_limit.py         # Token-bucket rate limiter
-│   ├── schemas.py            # Request/response models + chat message validation
-│   ├── openai_compat.py      # OpenAI-compatible response builders
-│   └── static/               # Chat UI (HTML/JS/CSS, served at /ui)
+├── src/local_graph_rag/
+│   ├── cli/
+│   │   └── manage_users.py       # User management command
+│   ├── rag/
+│   │   ├── embed.py              # Ollama embedding
+│   │   ├── ollama_client.py      # Ollama HTTP client
+│   │   ├── query_graph_rag.py    # Query entry point — local + global, CLI
+│   │   ├── query_router.py       # Local vs. global classifier
+│   │   ├── local_retrieval.py    # Entity lookup + graph traversal
+│   │   └── global_retrieval.py   # Community summary retrieval
+│   ├── graph/
+│   │   ├── store.py              # NetworkX + SQLite graph store
+│   │   ├── extractor.py          # LLM entity/relationship extraction
+│   │   └── summarizer.py         # Louvain community detection + summarization
+│   ├── ingest/
+│   │   ├── chunkers.py           # Document chunking
+│   │   └── index_documents.py    # Full ingestion pipeline
+│   ├── common/
+│   │   ├── config.py             # YAML config loader
+│   │   ├── paths.py              # Path normalization
+│   │   ├── qdrant.py             # Qdrant client singleton
+│   │   └── sqlite_store.py       # Thread-local SQLite connection wrapper
+│   ├── web/
+│   │   ├── api_server.py         # FastAPI server
+│   │   ├── routes.py             # HTTP routes
+│   │   ├── auth.py               # Session token + API key validation
+│   │   ├── user_store.py         # bcrypt user store
+│   │   ├── rate_limit.py         # Token-bucket rate limiter
+│   │   ├── schemas.py            # Request/response models
+│   │   ├── openai_compat.py      # OpenAI-compatible response builders
+│   │   └── static/               # Chat UI, served at /ui
+│   └── settings.py               # Env-var driven config
 ├── tests/
 │   ├── test_graph.py             # GraphStore + extractor unit tests
 │   ├── test_ingestion.py         # Fingerprint store + hash utility tests
@@ -218,11 +223,12 @@ local-graph-rag/
 │   ├── test_query_graph_rag.py   # End-to-end query module tests
 │   ├── test_api_server.py        # API server auth + endpoint tests
 │   └── test_index_security.py    # Ingestion security (path traversal, size limits)
-├── context/
-│   ├── GRAPH-RAG-PLAN.md     # Full architecture and implementation plan
-│   └── PHASE3-PUNCH-LIST.md  # Open data-integrity issues (findings 1–4)
-├── manage_users.py           # CLI for adding/removing/listing users
-└── settings.py               # Env-var driven config
+├── docs/
+│   ├── planning/                 # Architecture plans and punch lists
+│   └── security/                 # Security review notes
+├── Dockerfile
+├── docker-compose.yml
+└── pyproject.toml
 ```
 
 ---
@@ -233,7 +239,7 @@ local-graph-rag/
 - [x] **Phase 2** — Graph store (`graph/store.py`) + entity extractor (`graph/extractor.py`)
 - [x] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, crash-safe Qdrant ↔ SQLite ordering, stale file cleanup
 - [x] **Phase 4** — Louvain community detection, LLM-based community summarization with member-hash skip logic, community embedding store (`graph/summarizer.py`)
-- [x] **Phase 5** — Local retrieval (vector search → entity neighborhood expansion), global retrieval (cosine similarity over community summaries), LLM query router with heuristic fallback, and a CLI query interface (`api/query_graph_rag.py`)
+- [x] **Phase 5** — Local retrieval (vector search → entity neighborhood expansion), global retrieval (cosine similarity over community summaries), LLM query router with heuristic fallback, and a CLI query interface (`src/local_graph_rag/rag/query_graph_rag.py`)
 - [x] **Phase 6** — FastAPI web server with OpenAI-compatible streaming endpoint, chat UI, bcrypt/session/API-key auth stack, rate limiting, security headers, and ingestion security hardening (symlink guard, file-size limit, path traversal prevention)
 
 ---
