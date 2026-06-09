@@ -10,8 +10,9 @@ from local_graph_rag.ingest.index_documents import _is_safe_indexable_file, _is_
 
 @pytest.fixture(autouse=True)
 def patch_docs_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Point _DOCS_ROOT at a temp directory for each test."""
-    monkeypatch.setattr(_mod, "_DOCS_ROOT", tmp_path.resolve())
+    """Pin _DOCS_ROOTS and _ALLOWED to known values regardless of environment config."""
+    monkeypatch.setattr(_mod, "_DOCS_ROOTS", [tmp_path.resolve()])
+    monkeypatch.setattr(_mod, "_ALLOWED", frozenset({".md", ".txt", ".py"}))
 
 
 # ---------------------------------------------------------------------------

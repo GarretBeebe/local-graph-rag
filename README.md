@@ -106,7 +106,7 @@ All three are overridable via environment variables.
 ## Quick start
 
 ```bash
-cp .env.example .env          # set QDRANT_API_KEY, DOCS_PATH, and API_KEY
+cp .env.example .env          # set QDRANT_API_KEY, NEXTCLOUD_PATH, CODE_PATH, and optional API_KEY
 
 docker compose up -d qdrant
 
@@ -131,15 +131,19 @@ documents.
 docker compose up -d api
 
 # Or run locally during development
-uv run uvicorn local_graph_rag.web.api_server:app --host 0.0.0.0 --port 8000
+uv run uvicorn local_graph_rag.web.api_server:app --host 127.0.0.1 --port 8000
 ```
+
+Docker binds the API to `127.0.0.1` by default through `API_BIND_HOST`. Only bind to a LAN
+interface or `0.0.0.0` when the service is behind a trusted TLS-terminating reverse proxy.
 
 ### User management
 
 Before connecting a browser-based client, create at least one user:
 
 ```bash
-uv run graph-rag-users add alice mypassword
+uv run graph-rag-users add alice              # prompts for password
+uv run graph-rag-users add alice --password-stdin  # read password from stdin (scripting)
 uv run graph-rag-users list
 uv run graph-rag-users remove alice
 ```
@@ -157,8 +161,12 @@ Three authentication paths are supported:
 | `Authorization: Bearer <API_KEY>` | OpenAI-compatible clients (Chatbox, Open WebUI) |
 | `ALLOW_INSECURE_LOCALONLY=true` | Bypasses all auth checks for local-only installs |
 
-`API_KEY` is set in `.env`. When using Chatbox, point it at `http://localhost:8000` and set the
+`API_KEY` is set in `.env`, must be at least 32 characters when set, and is intended for
+OpenAI-compatible clients. When using Chatbox, point it at `http://localhost:8000` and set the
 API key to match.
+
+Authorization is intentionally coarse-grained for this local implementation: any authenticated
+user can query the full indexed corpus. Do not use this as a multi-tenant RBAC system.
 
 ### Querying from the CLI
 

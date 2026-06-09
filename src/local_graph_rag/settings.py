@@ -11,11 +11,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 DOCS_PATH = Path(os.environ.get("DOCS_PATH", str(PROJECT_ROOT / "documents")))
+INDEX_CONFIG_PATH = os.environ.get("INDEX_CONFIG_PATH", "")
 SQLITE_PATH = Path(os.environ.get("SQLITE_PATH", str(DATA_DIR / "graph.db")))
 
 # Qdrant
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
+QDRANT_URL = os.environ.get("QDRANT_URL", "")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
 COLLECTION = os.environ.get("QDRANT_COLLECTION", "graph_documents")
 VECTOR_SIZE = int(os.environ.get("VECTOR_SIZE", "768"))
@@ -138,6 +140,8 @@ def _validate_settings() -> None:
             f"settings: MAX_CHUNK_CHARS must be >= CHUNK_SIZE, "
             f"got {MAX_CHUNK_CHARS} < {CHUNK_SIZE}"
         )
+    if API_KEY and len(API_KEY) < 32:
+        raise ValueError("settings: API_KEY must be at least 32 characters when set")
 
 
 _validate_settings()

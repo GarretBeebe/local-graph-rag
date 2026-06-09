@@ -11,8 +11,11 @@ def normalize_path(path: str | Path) -> str:
 
 
 def normalize_extensions(extensions: Iterable[str]) -> frozenset[str]:
-    """Return a lowercase immutable extension set for repeated path checks."""
-    return frozenset(ext.lower() for ext in extensions)
+    """Return a normalized, lowercase, dot-prefixed extension set."""
+    return frozenset(
+        ext.lower() if ext.startswith(".") else f".{ext.lower()}"
+        for ext in extensions
+    )
 
 
 def has_allowed_extension(path: str | Path, allowed_extensions: Iterable[str]) -> bool:

@@ -1,0 +1,140 @@
+# Document index configuration for local-graph-rag.
+# Paths are container paths — host directories are mounted via docker-compose.
+# See .env.example for the corresponding host-path variables.
+
+index_paths:
+
+  - path: /app/documents/Nextcloud/AI-ML
+    recursive: true
+
+  - path: /app/documents/Nextcloud/My Computer Setup
+    recursive: true
+
+  - path: /app/documents/Nextcloud/OpenAI Projects Context
+    recursive: true
+
+  - path: /app/documents/Nextcloud/Resumes
+    recursive: true
+
+  - path: /app/documents/Nextcloud/Scripts
+    recursive: true
+
+  - path: /app/documents/Nextcloud/Software Engineering
+    recursive: true
+
+  - path: /app/documents/Nextcloud/Splunk
+    recursive: true
+
+  - path: /app/documents/Code
+    recursive: true
+    exclude_dirs:
+      - .git
+      - .venv
+      - venv
+      - __pycache__
+      - node_modules
+      - .npm
+      - .yarn
+      - .pytest_cache
+      - .mypy_cache
+      - .ruff_cache
+      - .tox
+      - .cache
+      - build
+      - dist
+      - target
+      - out
+      - .next
+      - .codex
+      - .idea
+      - .vscode
+      - wandb
+      - mlruns
+      - checkpoints
+
+
+allowed_extensions:
+  - .md
+  - .txt
+  - .py
+  - .js
+  - .ts
+  - .tsx
+  - .jsx
+  - .json
+  - .yaml
+  - .yml
+  - .toml
+  - .go
+  - .rs
+
+
+ignore_patterns:
+
+  # Version control
+  - .git
+  - .svn
+  - .hg
+
+  # Python
+  - __pycache__
+  - .venv
+  - venv
+  - .pytest_cache
+  - .mypy_cache
+  - .tox
+
+  # Node
+  - node_modules
+  - .npm
+  - .yarn
+
+  # Build outputs
+  - build
+  - dist
+  - target
+  - out
+  - .next
+
+  # IDE
+  - .idea
+  - .vscode
+
+  # Secrets and credentials
+  - .env
+  - .env.*
+  - .aws
+  - .azure
+  - .gnupg
+  - .ssh
+  - "*.key"
+  - "*.pem"
+  - "*.p12"
+  - "*.pfx"
+  - id_rsa
+  - id_dsa
+  - id_ecdsa
+  - id_ed25519
+
+  # OS junk
+  - .DS_Store
+  - Thumbs.db
+
+  # ML artifacts
+  - wandb
+  - mlruns
+  - checkpoints
+
+  # Binary and media
+  - "*.png"
+  - "*.jpg"
+  - "*.jpeg"
+  - "*.gif"
+  - "*.pdf"
+  - "*.zip"
+  - "*.tar"
+  - "*.gz"
+  - "*.mp4"
+  - "*.exe"
+  - "*.so"
+  - "*.dylib"

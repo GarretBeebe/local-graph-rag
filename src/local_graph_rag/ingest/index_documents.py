@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -10,11 +11,18 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
 from tqdm import tqdm
 
-from local_graph_rag.common.paths import has_allowed_extension, normalize_extensions, normalize_path
+from local_graph_rag.common.paths import (
+    has_allowed_extension,
+    is_under_any_root,
+    matches_ignore_pattern,
+    normalize_extensions,
+    normalize_path,
+)
 from local_graph_rag.common.qdrant import get_qdrant_client
 from local_graph_rag.graph.extractor import extract_entities_for_file
 from local_graph_rag.graph.store import GraphStore, slugify
 from local_graph_rag.ingest.chunkers import chunk_document
+from local_graph_rag.ingest.doc_config import IndexConfig, load_index_config
 from local_graph_rag.rag.embed import embed_batch
 from local_graph_rag.settings import (
     ALLOWED_EXTENSIONS,
@@ -26,14 +34,26 @@ from local_graph_rag.settings import (
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED = normalize_extensions(ALLOWED_EXTENSIONS)
+try:
+    _INDEX_CONFIG: IndexConfig | None = load_index_config()
+    _CONFIG_LOAD_ERROR: BaseException | None = None
+except Exception as _e:
+    _INDEX_CONFIG = None
+    _CONFIG_LOAD_ERROR = _e
+
+_ALLOWED: frozenset[str] = (
+    _INDEX_CONFIG.allowed_extensions if _INDEX_CONFIG
+    else normalize_extensions(ALLOWED_EXTENSIONS)
+)
+_DOCS_ROOTS: list[Path] = (
+    _INDEX_CONFIG.roots if _INDEX_CONFIG else [DOCS_PATH.resolve()]
+)
 _collection_ensured = False
-_DOCS_ROOT = DOCS_PATH.resolve()
 _HASH_READ_BLOCK_BYTES = 65536
 
 
 def _is_safe_indexable_file(path: Path) -> bool:
-    """Return True only if path is a real file inside DOCS_PATH with an allowed extension."""
+    """Return True only if path is a real file inside a known root with an allowed extension."""
     if path.is_symlink():
         return False
     try:
@@ -42,7 +62,7 @@ def _is_safe_indexable_file(path: Path) -> bool:
         return False
     return (
         resolved.is_file()
-        and resolved.is_relative_to(_DOCS_ROOT)
+        and is_under_any_root(resolved, _DOCS_ROOTS)
         and has_allowed_extension(resolved, _ALLOWED)
         and _is_within_size_limit(resolved)
     )
@@ -232,6 +252,52 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     return "indexed"
 
 
+def _accept(fpath: Path, ignore: list[str]) -> bool:
+    return not matches_ignore_pattern(fpath.name, ignore) and _is_safe_indexable_file(fpath)
+
+
+def _collect_files() -> list[Path]:
+    """Return all indexable files from configured index_paths or DOCS_PATH fallback."""
+    if _CONFIG_LOAD_ERROR is not None:
+        raise RuntimeError(
+            f"Failed to load index config: {_CONFIG_LOAD_ERROR}"
+        ) from _CONFIG_LOAD_ERROR
+
+    if _INDEX_CONFIG is None:
+        files = [p for p in DOCS_PATH.rglob("*") if _is_safe_indexable_file(p)]
+        logger.info("Found %d indexable files in %s", len(files), DOCS_PATH)
+        return files
+
+    files: list[Path] = []
+    ignore = _INDEX_CONFIG.ignore_patterns
+    for ip in _INDEX_CONFIG.index_paths:
+        if not ip.path.is_dir():
+            logger.warning("Skipping missing index_path: %s", ip.path)
+            continue
+        if ip.recursive:
+            for dirpath, dirnames, filenames in os.walk(ip.path, topdown=True):
+                dirnames[:] = [
+                    d for d in dirnames
+                    if d not in ip.exclude_dirs
+                    and not matches_ignore_pattern(d, ignore)
+                ]
+                for fname in filenames:
+                    fpath = Path(dirpath) / fname
+                    if _accept(fpath, ignore):
+                        files.append(fpath)
+        else:
+            for fpath in ip.path.iterdir():
+                if fpath.is_file() and _accept(fpath, ignore):
+                    files.append(fpath)
+
+    logger.info(
+        "Found %d indexable files across %d index path(s)",
+        len(files),
+        len(_INDEX_CONFIG.index_paths),
+    )
+    return files
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 
@@ -239,8 +305,7 @@ def main() -> None:
     client = get_qdrant_client()
     ensure_collection(client)
 
-    files = [p for p in DOCS_PATH.rglob("*") if _is_safe_indexable_file(p)]
-    logger.info("Found %d indexable files in %s", len(files), DOCS_PATH)
+    files = _collect_files()
 
     on_disk = {normalize_path(p) for p in files}
     stale = set(store.list_all_paths()) - on_disk

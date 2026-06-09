@@ -5,7 +5,7 @@
 # and make sure it is running before starting this stack.
 #
 # Quick start:
-#   cp .env.example .env   # fill in QDRANT_API_KEY and DOCS_PATH
+#   cp .env.example .env   # fill in QDRANT_API_KEY, NEXTCLOUD_PATH, CODE_PATH
 #   docker compose up -d qdrant
 #   docker compose --profile indexer run --rm indexer   # index documents
 #   docker compose up -d api                            # start API (Phase 6+)
@@ -17,7 +17,8 @@ x-rag-env: &rag-env
   QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
   OLLAMA_BASE_URL: http://host.docker.internal:11434
   SQLITE_PATH: /app/data/graph.db
-  DOCS_PATH: /app/documents
+  INDEX_CONFIG_PATH: /app/config/index_config.yaml
+  EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
   EXTRACT_MODEL: ${EXTRACT_MODEL:-qwen2.5:3b}
   SUMMARIZE_MODEL: ${SUMMARIZE_MODEL:-qwen2.5:7b}
   GEN_MODEL: ${GEN_MODEL:-qwen2.5:14b}
@@ -45,7 +46,7 @@ services:
     restart: unless-stopped
     command: uvicorn local_graph_rag.web.api_server:app --host 0.0.0.0 --port 8000
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
     depends_on:
       qdrant:
         condition: service_started
@@ -61,7 +62,7 @@ services:
       COMMUNITY_RETRIEVAL_N: ${COMMUNITY_RETRIEVAL_N:-5}
     volumes:
       - graph-data:/app/data
-      - ${DOCS_PATH:?Set DOCS_PATH in .env}:/app/documents:ro
+      - ./config:/app/config:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 15s
@@ -84,7 +85,9 @@ services:
       <<: *rag-env
     volumes:
       - graph-data:/app/data
-      - ${DOCS_PATH:?Set DOCS_PATH in .env}:/app/documents:ro
+      - ./config:/app/config:ro
+      - ${NEXTCLOUD_PATH:?Set NEXTCLOUD_PATH in .env}:/app/documents/Nextcloud:ro
+      - ${CODE_PATH:?Set CODE_PATH in .env}:/app/documents/Code:ro
 
   # Run on-demand after indexer — not started by `docker compose up`.
   # Usage: docker compose --profile summarizer run --rm summarizer

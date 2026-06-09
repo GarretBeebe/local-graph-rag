@@ -1,12 +1,14 @@
 """User management CLI for the Graph RAG web server.
 
 Usage:
-    uv run graph-rag-users add <username> <password>
+    uv run graph-rag-users add <username>                  # prompts for password
+    uv run graph-rag-users add <username> --password-stdin # reads password from stdin
     uv run graph-rag-users remove <username>
     uv run graph-rag-users list
 """
 
 import argparse
+import getpass
 import sys
 
 import bcrypt
@@ -20,7 +22,11 @@ def main() -> None:
 
     add_p = sub.add_parser("add", help="Add or update a user's password")
     add_p.add_argument("username")
-    add_p.add_argument("password")
+    add_p.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read password from stdin instead of prompting (for scripting)",
+    )
 
     rm_p = sub.add_parser("remove", help="Remove a user and all their sessions")
     rm_p.add_argument("username")
@@ -31,7 +37,14 @@ def main() -> None:
     init_db()
 
     if args.command == "add":
-        pw_hash = bcrypt.hashpw(args.password.encode(), bcrypt.gensalt()).decode()
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\r\n")
+        else:
+            password = getpass.getpass("Password: ")
+        if not password:
+            print("Error: password cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         upsert_user(args.username, pw_hash)
         print(f"User '{args.username}' saved.")
     elif args.command == "remove":

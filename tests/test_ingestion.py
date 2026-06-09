@@ -5,8 +5,13 @@ from pathlib import Path
 
 import pytest
 
+import local_graph_rag.ingest.index_documents as _idx_mod
 from local_graph_rag.graph.store import GraphStore
-from local_graph_rag.ingest.index_documents import _compute_hash, _match_entity_chunks
+from local_graph_rag.ingest.index_documents import (
+    _collect_files,
+    _compute_hash,
+    _match_entity_chunks,
+)
 
 # ---------------------------------------------------------------------------
 # GraphStore — fingerprints
@@ -93,3 +98,18 @@ def test_match_entity_chunks_uses_word_boundaries():
 def test_match_entity_chunks_skips_short_names():
     pairs = _match_entity_chunks(["C is a programming language."], ["c1"], [{"name": "C"}], ["c"])
     assert pairs == []
+
+
+# ---------------------------------------------------------------------------
+# _collect_files — config load error propagation
+# ---------------------------------------------------------------------------
+
+
+def test_collect_files_raises_runtime_error_on_config_load_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    err = FileNotFoundError("config not found")
+    monkeypatch.setattr(_idx_mod, "_CONFIG_LOAD_ERROR", err)
+    monkeypatch.setattr(_idx_mod, "_INDEX_CONFIG", None)
+    with pytest.raises(RuntimeError, match="Failed to load index config"):
+        _collect_files()
