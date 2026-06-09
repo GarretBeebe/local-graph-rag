@@ -16,6 +16,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "numpy",
+    "bcrypt",
 ]
 
 [dependency-groups]

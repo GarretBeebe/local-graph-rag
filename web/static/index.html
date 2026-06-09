@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Graph RAG</title>
+  <script src="/ui/marked.min.js"></script>
+  <script src="/ui/purify.min.js"></script>
+  <link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+
+  <div id="login-view">
+    <div class="login-card">
+      <h1>Graph RAG</h1>
+      <form id="login-form">
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" type="text" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </div>
+        <div id="login-error"></div>
+        <button type="submit" id="login-btn" class="primary login-submit">
+          Sign in
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div id="chat-view" hidden>
+    <header>
+      <h1>Graph RAG</h1>
+      <div class="header-right">
+        <select id="model-select" title="Model"></select>
+        <select id="mode-select" title="Graph mode">
+          <option value="auto">Auto</option>
+          <option value="local">Local</option>
+          <option value="global">Global</option>
+        </select>
+        <button id="logout-btn" class="secondary">Sign out</button>
+      </div>
+    </header>
+    <div id="messages"></div>
+    <div class="input-bar">
+      <textarea id="input" placeholder="Ask a question… (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+      <button id="send-btn" class="primary">Send</button>
+      <button id="stop-btn" class="stop" hidden>Stop</button>
+    </div>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

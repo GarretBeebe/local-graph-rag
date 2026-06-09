@@ -33,6 +33,31 @@ OLLAMA_MAX_RETRIES = int(os.environ.get("OLLAMA_MAX_RETRIES", "2"))
 OLLAMA_RETRY_DELAY_SECONDS = float(os.environ.get("OLLAMA_RETRY_DELAY_SECONDS", "1.0"))
 GENERATION_CONCURRENCY_LIMIT = int(os.environ.get("GENERATION_CONCURRENCY_LIMIT", "1"))
 
+# Auth and web server
+API_KEY = os.environ.get("API_KEY", "")
+ALLOW_INSECURE_LOCALONLY = os.environ.get("ALLOW_INSECURE_LOCALONLY", "").lower() in ("1", "true")
+SESSION_EXPIRY_HOURS = int(os.environ.get("SESSION_EXPIRY_HOURS", "8"))
+_raw_trusted_proxies = os.environ.get("TRUSTED_PROXY_IPS", "")
+TRUSTED_PROXY_IPS: set[str] = {ip.strip() for ip in _raw_trusted_proxies.split(",") if ip.strip()}
+_raw_cors_origins = os.environ.get("CORS_ORIGINS", "")
+CORS_ORIGINS = [o.strip() for o in _raw_cors_origins.split(",") if o.strip()]
+RATE_WINDOW_SECONDS = float(os.environ.get("RATE_WINDOW_SECONDS", "60.0"))
+RATE_MAX_REQUESTS = int(os.environ.get("RATE_MAX_REQUESTS", "30"))
+RATE_MAX_LOGIN_REQUESTS = int(os.environ.get("RATE_MAX_LOGIN_REQUESTS", "10"))
+RAG_EXECUTOR_WORKERS = int(os.environ.get("RAG_EXECUTOR_WORKERS", "2"))
+RAG_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("RAG_REQUEST_TIMEOUT_SECONDS", "240.0"))
+STREAM_TIMEOUT_SECONDS = float(os.environ.get("STREAM_TIMEOUT_SECONDS", "120.0"))
+OLLAMA_MODEL_LIST_TIMEOUT_SECONDS = float(
+    os.environ.get("OLLAMA_MODEL_LIST_TIMEOUT_SECONDS", "5.0")
+)
+MAX_CHAT_MESSAGES = int(os.environ.get("MAX_CHAT_MESSAGES", "200"))
+MAX_CHAT_CONTENT_ITEMS = int(os.environ.get("MAX_CHAT_CONTENT_ITEMS", "32"))
+MAX_CHAT_MESSAGE_CHARS = int(os.environ.get("MAX_CHAT_MESSAGE_CHARS", "8000"))
+MAX_CHAT_TOTAL_CHARS = int(os.environ.get("MAX_CHAT_TOTAL_CHARS", "120000"))
+MAX_CHAT_QUESTION_CHARS = int(os.environ.get("MAX_CHAT_QUESTION_CHARS", "12000"))
+MAX_MODEL_NAME_CHARS = int(os.environ.get("MAX_MODEL_NAME_CHARS", "128"))
+MAX_INDEX_FILE_BYTES = int(os.environ.get("MAX_INDEX_FILE_BYTES", str(5 * 1024 * 1024)))
+
 # Chunking
 MAX_EMBED_CHARS = 6000
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "500"))
@@ -82,6 +107,18 @@ def _validate_settings() -> None:
         raise ValueError(f"settings: OLLAMA_MAX_RETRIES must be >= 0, got {OLLAMA_MAX_RETRIES}")
     if CHUNK_OVERLAP < 0:
         raise ValueError(f"settings: CHUNK_OVERLAP must be >= 0, got {CHUNK_OVERLAP}")
+    if MAX_CHAT_QUESTION_CHARS > MAX_CHAT_TOTAL_CHARS:
+        raise ValueError(
+            f"settings: MAX_CHAT_QUESTION_CHARS must be <= MAX_CHAT_TOTAL_CHARS, "
+            f"got {MAX_CHAT_QUESTION_CHARS} > {MAX_CHAT_TOTAL_CHARS}"
+        )
+    # When MAX_CHAT_QUESTION_CHARS >= MAX_CHAT_MESSAGE_CHARS, the question-length check in
+    # extract_question_from_messages is unreachable (questions are bounded by the per-message
+    # limit first). Set MAX_CHAT_QUESTION_CHARS < MAX_CHAT_MESSAGE_CHARS to make it active.
+    if MAX_CHAT_QUESTION_CHARS < MAX_CHAT_MESSAGE_CHARS and MAX_CHAT_QUESTION_CHARS <= 0:
+        raise ValueError(
+            f"settings: MAX_CHAT_QUESTION_CHARS must be > 0, got {MAX_CHAT_QUESTION_CHARS}"
+        )
     if CHUNK_OVERLAP >= CHUNK_SIZE:
         raise ValueError(
             f"settings: CHUNK_OVERLAP must be smaller than CHUNK_SIZE, "

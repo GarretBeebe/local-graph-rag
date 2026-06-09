@@ -6,9 +6,8 @@ vector search to answer both specific and thematic questions.
 Runs entirely on local hardware via [Ollama](https://ollama.ai) and
 [Qdrant](https://qdrant.tech). No external API calls required.
 
-> **Status:** Phases 1–5 complete. The ingestion pipeline is functional, communities are
-> detected and summarized, and local/global retrieval is wired up behind a CLI query interface.
-> The web interface is coming in Phase 6.
+> **Status:** Phases 1–6 complete. Ingestion pipeline, community detection, local/global
+> retrieval, and the OpenAI-compatible web server with full auth are all operational.
 > See [`context/GRAPH-RAG-PLAN.md`](context/GRAPH-RAG-PLAN.md) for the full implementation plan.
 
 ---
@@ -107,14 +106,14 @@ All three are overridable via environment variables.
 ## Quick start
 
 ```bash
-cp .env.example .env          # set QDRANT_API_KEY and DOCS_PATH
+cp .env.example .env          # set QDRANT_API_KEY, DOCS_PATH, and API_KEY
 
 docker compose up -d qdrant
 
-# Index documents (Phase 3)
+# Index documents
 docker compose --profile indexer run --rm indexer
 
-# Detect communities and build LLM summaries (Phase 4)
+# Detect communities and build LLM summaries
 docker compose --profile summarizer run --rm summarizer
 
 # Re-run with --force to regenerate all summaries even if membership is unchanged
@@ -125,10 +124,45 @@ The summarizer is idempotent: it skips communities whose membership hasn't chang
 last run (tracked by a SHA-256 member hash). Run it after any indexer run that adds new
 documents.
 
-### Querying
+### Running the web server
 
-With Qdrant and Ollama running and at least one document indexed, ask questions directly from
-the CLI:
+```bash
+# Start the API server (serves the chat UI at http://localhost:8000/ui)
+docker compose up -d api
+
+# Or run locally during development
+uv run uvicorn web.api_server:app --host 0.0.0.0 --port 8000
+```
+
+### User management
+
+Before connecting a browser-based client, create at least one user:
+
+```bash
+uv run python manage_users.py add alice mypassword
+uv run python manage_users.py list
+uv run python manage_users.py remove alice
+```
+
+Users are stored in `data/users.sqlite3`. All sessions for a user are revoked when their
+password is updated or they are removed.
+
+### Authentication
+
+Three authentication paths are supported:
+
+| Path | Use case |
+|---|---|
+| Browser login (username + password) | Chat UI at `/ui` |
+| `Authorization: Bearer <API_KEY>` | OpenAI-compatible clients (Chatbox, Open WebUI) |
+| `ALLOW_INSECURE_LOCALONLY=true` | Bypasses all auth checks for local-only installs |
+
+`API_KEY` is set in `.env`. When using Chatbox, point it at `http://localhost:8000` and set the
+API key to match.
+
+### Querying from the CLI
+
+With Qdrant and Ollama running and at least one document indexed:
 
 ```bash
 # Auto-routes between local (entity-specific) and global (thematic) retrieval
@@ -145,8 +179,6 @@ accordingly. Global mode falls back to local retrieval if no community summaries
 ---
 
 ## Project Layout
-
-Files marked `(planned)` are not yet implemented.
 
 ```
 local-graph-rag/
@@ -167,19 +199,29 @@ local-graph-rag/
 ├── common/
 │   ├── config.py             # YAML config loader
 │   ├── paths.py              # Path normalization
-│   └── qdrant.py             # Qdrant client singleton
+│   ├── qdrant.py             # Qdrant client singleton
+│   └── sqlite_store.py       # Thread-local SQLite connection wrapper
 ├── web/
-│   └── api_server.py         # FastAPI server (OpenAI-compat)       (planned)
+│   ├── api_server.py         # FastAPI server (OpenAI-compat, streaming, auth middleware)
+│   ├── auth.py               # Session token + API key validation
+│   ├── user_store.py         # bcrypt user store (SQLite-backed)
+│   ├── rate_limit.py         # Token-bucket rate limiter
+│   ├── schemas.py            # Request/response models + chat message validation
+│   ├── openai_compat.py      # OpenAI-compatible response builders
+│   └── static/               # Chat UI (HTML/JS/CSS, served at /ui)
 ├── tests/
 │   ├── test_graph.py             # GraphStore + extractor unit tests
 │   ├── test_ingestion.py         # Fingerprint store + hash utility tests
 │   ├── test_summarizer.py        # Community summarizer unit tests
 │   ├── test_retrieval.py         # Local + global retrieval unit tests
 │   ├── test_query_router.py      # Local/global routing unit tests
-│   └── test_query_graph_rag.py   # End-to-end query module tests
+│   ├── test_query_graph_rag.py   # End-to-end query module tests
+│   ├── test_api_server.py        # API server auth + endpoint tests
+│   └── test_index_security.py    # Ingestion security (path traversal, size limits)
 ├── context/
 │   ├── GRAPH-RAG-PLAN.md     # Full architecture and implementation plan
 │   └── PHASE3-PUNCH-LIST.md  # Open data-integrity issues (findings 1–4)
+├── manage_users.py           # CLI for adding/removing/listing users
 └── settings.py               # Env-var driven config
 ```
 
@@ -192,7 +234,7 @@ local-graph-rag/
 - [x] **Phase 3** — Full ingestion pipeline: fingerprint-based change detection, chunks registry, crash-safe Qdrant ↔ SQLite ordering, stale file cleanup
 - [x] **Phase 4** — Louvain community detection, LLM-based community summarization with member-hash skip logic, community embedding store (`graph/summarizer.py`)
 - [x] **Phase 5** — Local retrieval (vector search → entity neighborhood expansion), global retrieval (cosine similarity over community summaries), LLM query router with heuristic fallback, and a CLI query interface (`api/query_graph_rag.py`)
-- [ ] **Phase 6** — FastAPI web server with streaming
+- [x] **Phase 6** — FastAPI web server with OpenAI-compatible streaming endpoint, chat UI, bcrypt/session/API-key auth stack, rate limiting, security headers, and ingestion security hardening (symlink guard, file-size limit, path traversal prevention)
 
 ---
 

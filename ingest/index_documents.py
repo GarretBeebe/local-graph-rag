@@ -16,12 +16,44 @@ from common.qdrant import get_qdrant_client
 from graph.extractor import extract_entities_for_file
 from graph.store import GraphStore, slugify
 from ingest.chunkers import chunk_document
-from settings import ALLOWED_EXTENSIONS, COLLECTION, DOCS_PATH, VECTOR_SIZE
+from settings import ALLOWED_EXTENSIONS, COLLECTION, DOCS_PATH, MAX_INDEX_FILE_BYTES, VECTOR_SIZE
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED = normalize_extensions(ALLOWED_EXTENSIONS)
 _collection_ensured = False
+_DOCS_ROOT = DOCS_PATH.resolve()
+
+
+def _is_safe_indexable_file(path: Path) -> bool:
+    """Return True only if path is a real file inside DOCS_PATH with an allowed extension."""
+    if path.is_symlink():
+        return False
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return False
+    return (
+        resolved.is_file()
+        and resolved.is_relative_to(_DOCS_ROOT)
+        and has_allowed_extension(resolved, _ALLOWED)
+        and _is_within_size_limit(resolved)
+    )
+
+
+def _is_within_size_limit(path: Path) -> bool:
+    """Return True if the file is within MAX_INDEX_FILE_BYTES."""
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        logger.warning("Skipping unreadable file %s: %s", path, e)
+        return False
+    if size > MAX_INDEX_FILE_BYTES:
+        logger.warning(
+            "Skipping oversized file %s: %d bytes > %d", path, size, MAX_INDEX_FILE_BYTES
+        )
+        return False
+    return True
 
 
 def _compute_hash(path: Path) -> str:
@@ -188,10 +220,7 @@ def main() -> None:
     client = get_qdrant_client()
     ensure_collection(client)
 
-    files = [
-        p for p in DOCS_PATH.rglob("*")
-        if p.is_file() and has_allowed_extension(p, _ALLOWED)
-    ]
+    files = [p for p in DOCS_PATH.rglob("*") if _is_safe_indexable_file(p)]
     logger.info("Found %d indexable files in %s", len(files), DOCS_PATH)
 
     on_disk = {normalize_path(p) for p in files}
