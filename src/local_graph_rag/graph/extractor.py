@@ -32,6 +32,7 @@ Text:
 class ExtractionResult:
     entities: list[dict] = field(default_factory=list)
     relationships: list[dict] = field(default_factory=list)
+    had_failure: bool = False
 
 
 def _estimate_tokens(text: str) -> int:
@@ -47,7 +48,7 @@ def _none_to_null(text: str) -> str:
     still be rewritten. Accepted because this only fires on already-invalid JSON as
     last-resort recovery (stale-cache-replay only — see _candidates).
     """
-    return re.sub(r"([:,\[]\s*)None(\s*[,}\]])", r"\1null\2", text)
+    return re.sub(r"([:,\[]\s*)None(?=\s*[,}\]])", r"\1null", text)
 
 
 def _candidates(text: str) -> list[str]:
@@ -64,6 +65,10 @@ def _candidates(text: str) -> list[str]:
         remainder = text[2:].lstrip()
         if remainder:
             out.append(remainder)
+            # Candidate 2b: same, with None -> null substitution on the remainder.
+            fixed_remainder = _none_to_null(remainder)
+            if fixed_remainder != remainder:
+                out.append(fixed_remainder)
 
     # Candidate 3: extract first {...} block (handles leading/trailing prose).
     match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -77,7 +82,7 @@ def _candidates(text: str) -> list[str]:
         out.append(fixed_text)
 
     # Candidate 5: substitute None -> null on the isolated {...} block (if any).
-    if block is not None:
+    if block is not None and block != text:
         fixed_block = _none_to_null(block)
         if fixed_block != block:
             out.append(fixed_block)
@@ -192,6 +197,7 @@ def extract_entities_for_file(
     cached = store.get_cached_extractions(filepath)
     all_entities: list[dict] = []
     all_relationships: list[dict] = []
+    any_failure = False
 
     for i, batch_text in enumerate(batches):
         try:
@@ -208,6 +214,7 @@ def extract_entities_for_file(
                 "Extraction failed for %s batch %d; treating as empty", filepath, i
             )
             result = ExtractionResult()
+            any_failure = True
 
         all_entities.extend(result.entities)
         all_relationships.extend(result.relationships)
@@ -215,4 +222,8 @@ def extract_entities_for_file(
     normalized_entities, valid_slugs = _normalize_entities(all_entities)
     normalized_relationships = _normalize_relationships(all_relationships, valid_slugs)
 
-    return ExtractionResult(entities=normalized_entities, relationships=normalized_relationships)
+    return ExtractionResult(
+        entities=normalized_entities,
+        relationships=normalized_relationships,
+        had_failure=any_failure,
+    )

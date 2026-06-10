@@ -226,9 +226,10 @@ def test_extract_entities_for_file_requests_json_format(store: GraphStore, monke
 
     monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
 
-    extract_entities_for_file(["some chunk text"], "foo.py", store)
+    result = extract_entities_for_file(["some chunk text"], "foo.py", store)
 
     assert captured.get("format") == "json"
+    assert result.had_failure is False
 
 
 def test_extract_entities_for_file_isolates_batch_failure(store: GraphStore, monkeypatch):
@@ -260,6 +261,7 @@ def test_extract_entities_for_file_isolates_batch_failure(store: GraphStore, mon
     )
 
     assert [e["name"] for e in result.entities] == ["Alpha"]
+    assert result.had_failure is True
 
     cached = store.get_cached_extractions("foo.py")
     assert 0 in cached
@@ -365,6 +367,16 @@ def test_parse_double_json_prefix_recovers_entity():
     assert result.entities[0]["name"] == "X"
 
 
+def test_parse_double_json_prefix_with_none_recovers_entity():
+    response = (
+        '{}\n{"entities": [{"name": "X", "type": "CLASS", "description": None}],'
+        ' "relationships": []}'
+    )
+    result = _parse_extraction_response(response)
+    assert len(result.entities) == 1
+    assert result.entities[0]["name"] == "X"
+
+
 def test_parse_python_none_recovers_via_null_substitution():
     response = (
         '{"entities": [{"name": "A", "type": "CLASS", "description": "a"},'
@@ -373,6 +385,18 @@ def test_parse_python_none_recovers_via_null_substitution():
     )
     result = _parse_extraction_response(response)
     assert len(result.entities) == 2
+    assert len(result.relationships) == 1
+    assert result.relationships[0]["target"] == "B"
+
+
+def test_parse_consecutive_none_values_in_list():
+    response = (
+        '{"entities": [{"name": "A", "type": "CLASS", "description": "a"},'
+        ' {"name": "B", "type": "CLASS", "description": "b"}],'
+        ' "relationships": [None, None,'
+        ' {"source": "A", "target": "B", "label": "uses"}]}'
+    )
+    result = _parse_extraction_response(response)
     assert len(result.relationships) == 1
     assert result.relationships[0]["target"] == "B"
 

@@ -1,9 +1,11 @@
 """Unit tests for Phase 3 — fingerprint store methods and file hash utilities."""
 
 import hashlib
+import uuid
 from pathlib import Path
 
 import pytest
+from qdrant_client.models import PayloadSchemaType, PointStruct
 
 import local_graph_rag.ingest.index_documents as _idx_mod
 from local_graph_rag.graph.store import GraphStore
@@ -11,6 +13,8 @@ from local_graph_rag.ingest.index_documents import (
     _collect_files,
     _compute_hash,
     _match_entity_chunks,
+    _write_index_data,
+    ensure_collection,
 )
 
 # ---------------------------------------------------------------------------
@@ -113,3 +117,96 @@ def test_collect_files_raises_runtime_error_on_config_load_failure(
     monkeypatch.setattr(_idx_mod, "_INDEX_CONFIG", None)
     with pytest.raises(RuntimeError, match="Failed to load index config"):
         _collect_files()
+
+
+# ---------------------------------------------------------------------------
+# ensure_collection / _write_index_data — fake Qdrant client
+# ---------------------------------------------------------------------------
+
+
+class _FakeQdrant:
+    def __init__(self, exists=False):
+        self._exists = exists
+        self.created_collection = False
+        self.payload_index_calls: list[dict] = []
+        self.upserts: list[dict] = []
+
+    def collection_exists(self, name):
+        return self._exists
+
+    def create_collection(self, **kwargs):
+        self.created_collection = True
+
+    def create_payload_index(self, **kwargs):
+        self.payload_index_calls.append(kwargs)
+
+    def upsert(self, **kwargs):
+        self.upserts.append(kwargs)
+
+
+def test_ensure_collection_creates_payload_index(monkeypatch: pytest.MonkeyPatch):
+    for exists in (False, True):
+        monkeypatch.setattr(_idx_mod, "_collection_ensured", False)
+        client = _FakeQdrant(exists=exists)
+
+        ensure_collection(client)
+
+        assert client.created_collection is (not exists)
+        assert len(client.payload_index_calls) == 1
+        call = client.payload_index_calls[0]
+        assert call["field_name"] == "def_name"
+        assert call["field_schema"] == PayloadSchemaType.KEYWORD
+
+
+def _make_points(chunks: list[str], filepath: str) -> list[PointStruct]:
+    return [
+        PointStruct(
+            id=str(uuid.uuid4()),
+            vector=[0.0],
+            payload={"text": c, "filepath": filepath, "chunk_index": i, "def_name": None},
+        )
+        for i, c in enumerate(chunks)
+    ]
+
+
+def test_write_index_data_skips_hash_on_extraction_failure(
+    store: GraphStore, monkeypatch: pytest.MonkeyPatch
+):
+    """A failed extraction batch must leave the file's hash unset so the next
+    run retries it (see extractor.ExtractionResult.had_failure).
+    """
+    monkeypatch.setattr("local_graph_rag.graph.extractor.EXTRACT_BATCH_TOKENS", 1)
+
+    call_count = 0
+
+    def _fake_generate(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return '{"entities": [], "relationships": []}'
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+
+    chunks = ["alpha entity chunk", "beta entity chunk"]
+    points = _make_points(chunks, "foo.py")
+
+    _write_index_data("foo.py", chunks, points, store, _FakeQdrant(), "hash123")
+
+    assert store.get_hash("foo.py") is None
+
+
+def test_write_index_data_sets_hash_on_full_success(
+    store: GraphStore, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "local_graph_rag.rag.ollama_client.generate",
+        lambda *a, **k: '{"entities": [], "relationships": []}',
+    )
+
+    chunks = ["alpha entity chunk"]
+    points = _make_points(chunks, "foo.py")
+
+    _write_index_data("foo.py", chunks, points, store, _FakeQdrant(), "hash123")
+
+    assert store.get_hash("foo.py") == "hash123"

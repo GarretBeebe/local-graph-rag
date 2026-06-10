@@ -130,6 +130,13 @@ def _delete_file(store: GraphStore, client: QdrantClient, filepath: str) -> None
 
 
 def ensure_collection(client: QdrantClient) -> None:
+    """Ensure the Qdrant collection exists and has the def_name payload index.
+
+    Two responsibilities gated by one _collection_ensured flag: create the
+    collection if missing, and ensure the def_name keyword payload index exists
+    for exact-match lookups in local_retrieval. create_payload_index is
+    idempotent, so calling it on an already-indexed field is a cheap no-op.
+    """
     global _collection_ensured
     if _collection_ensured:
         return
@@ -206,7 +213,8 @@ def _write_index_data(
         for rel in result.relationships
     ])
     store.link_chunks(_match_entity_chunks(chunks, point_ids, result.entities, entity_ids))
-    store.upsert_hash(filepath, current_hash)
+    if not result.had_failure:
+        store.upsert_hash(filepath, current_hash)
     return len(entity_ids)
 
 

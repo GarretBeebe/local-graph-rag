@@ -70,6 +70,26 @@ def test_format_local_falls_back_to_slug_for_unresolvable_relationship_endpoint(
     assert "GraphStore --[USES]--> missing_entity" in prompt
 
 
+def test_format_local_caps_chunk_block_size():
+    chunk = "x" * 6000
+    ctx = LocalContext(entities=[], relationships=[], chunk_texts=[chunk, chunk, chunk])
+
+    prompt = _format_local(ctx, "q")
+
+    # 6000 + 6000 > 10_000, so only the first chunk is included.
+    assert prompt.count(chunk) == 1
+
+
+def test_format_local_chunk_block_always_includes_first_chunk_even_if_oversized():
+    huge_chunk = "x" * 15000
+    ctx = LocalContext(entities=[], relationships=[], chunk_texts=[huge_chunk, "small chunk"])
+
+    prompt = _format_local(ctx, "q")
+
+    assert huge_chunk in prompt
+    assert "small chunk" not in prompt
+
+
 # ---------------------------------------------------------------------------
 # _validate_mode
 # ---------------------------------------------------------------------------

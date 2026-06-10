@@ -115,6 +115,21 @@ ignore_patterns:
     assert "*.key" in cfg.ignore_patterns
 
 
+def test_real_config_excludes_claude_globally(monkeypatch: pytest.MonkeyPatch):
+    """Regression test: .claude must be globally ignored, not just under one index_path.
+
+    A prior config edit accidentally scoped .claude exclusion to only the Code
+    path's exclude_dirs, leaving it unexcluded under the other 7 index paths.
+    """
+    real_config = Path(__file__).parent.parent / "config" / "index_config.yaml"
+    monkeypatch.setattr(
+        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(real_config)
+    )
+    cfg = load_index_config()
+    assert cfg is not None
+    assert ".claude" in cfg.ignore_patterns
+
+
 def test_roots_resolves_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = _write_config(tmp_path, f"index_paths:\n  - path: {tmp_path}\n")
     monkeypatch.setattr(

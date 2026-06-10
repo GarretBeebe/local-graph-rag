@@ -26,6 +26,10 @@ from local_graph_rag.settings import CHUNK_OVERLAP, CHUNK_SIZE, MAX_CHUNK_CHARS,
 _SEPARATORS = ["\n\n", "\n", " ", ""]
 
 
+def _tag_none(chunks: list[str]) -> list[tuple[str, str | None]]:
+    return [(c, None) for c in chunks]
+
+
 def _merge_splits(splits: list[str], separator: str) -> list[str]:
     chunks: list[str] = []
     current: list[str] = []
@@ -93,7 +97,7 @@ def chunk_python(text: str) -> list[tuple[str, str | None]]:
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
-        return [(c, None) for c in chunk_text(text)]
+        return _tag_none(chunk_text(text))
 
     lines = text.splitlines(keepends=True)
     total_lines = len(lines)
@@ -134,7 +138,7 @@ def chunk_python(text: str) -> list[tuple[str, str | None]]:
     if prev_end < total_lines:
         _emit(_span(prev_end + 1, total_lines), None, chunks)
 
-    return chunks if chunks else [(c, None) for c in chunk_text(text)]
+    return chunks if chunks else _tag_none(chunk_text(text))
 
 
 # -------------------------
@@ -216,6 +220,6 @@ def chunk_document(path: Path, text: str) -> list[tuple[str, str | None]]:
         return chunk_python(text)
 
     if suffix in {".md", ".markdown"}:
-        return [(c, None) for c in chunk_markdown(text)]
+        return _tag_none(chunk_markdown(text))
 
-    return [(c, None) for c in chunk_text(text)]
+    return _tag_none(chunk_text(text))

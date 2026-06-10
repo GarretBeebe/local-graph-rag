@@ -48,7 +48,6 @@ index_paths:
       - .codex
       - .idea
       - .vscode
-      - .claude
       - wandb
       - mlruns
       - checkpoints
@@ -102,6 +101,7 @@ ignore_patterns:
   # IDE
   - .idea
   - .vscode
+  - .claude
 
   # Secrets and credentials
   - .env

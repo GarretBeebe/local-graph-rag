@@ -42,6 +42,10 @@ Answer the question using the community summaries below.
 Question: {question}
 Answer:"""
 
+# local_retrieve can return up to k + _MAX_IDENTIFIER_LOOKUPS chunks (vector hits
+# plus def_name exact-matches), so cap the joined block to bound prompt size.
+_MAX_CHUNK_BLOCK_CHARS = 10_000
+
 
 def _format_local(ctx: LocalContext, question: str) -> str:
     names = {e["id"]: e["name"] for e in ctx.entities}
@@ -54,7 +58,14 @@ def _format_local(ctx: LocalContext, question: str) -> str:
         f"{names.get(r['target_id'], r['target_id'])}"
         for r in ctx.relationships
     ) or "(none)"
-    chunk_block = "\n\n".join(ctx.chunk_texts) or "(none)"
+    parts: list[str] = []
+    total = 0
+    for text in ctx.chunk_texts:
+        if parts and total + len(text) > _MAX_CHUNK_BLOCK_CHARS:
+            break
+        parts.append(text)
+        total += len(text)
+    chunk_block = "\n\n".join(parts) or "(none)"
     return _LOCAL_PROMPT.format(
         entity_block=entity_block,
         relationship_block=rel_block,

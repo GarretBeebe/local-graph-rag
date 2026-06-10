@@ -21,19 +21,32 @@ def store(tmp_path):
 
 
 class _FakePoint:
-    def __init__(self, chunk_id: str, text: str = ""):
+    def __init__(
+        self,
+        chunk_id: str,
+        text: str = "",
+        def_name: str | None = None,
+        chunk_index: int = 0,
+    ):
         self.id = chunk_id
-        self.payload = {"text": text} if text else {}
+        payload: dict = {}
+        if text:
+            payload["text"] = text
+        if def_name is not None:
+            payload["def_name"] = def_name
+        payload["chunk_index"] = chunk_index
+        self.payload = payload
 
 
 class _FakeQdrant:
     def __init__(
         self,
         points: list[_FakePoint],
-        scroll_results: dict[str, list[_FakePoint]] | None = None,
+        scroll_points: list[_FakePoint] | None = None,
     ):
         self._points = points
-        self._scroll_results = scroll_results or {}
+        self._scroll_points = scroll_points or []
+        self.scroll_call_count = 0
 
     def query_points(self, *args, **kwargs):
         class _Result:
@@ -44,8 +57,10 @@ class _FakeQdrant:
         return r
 
     def scroll(self, *, scroll_filter, **kwargs):
-        def_name = scroll_filter.must[0].match.value
-        return self._scroll_results.get(def_name, []), None
+        self.scroll_call_count += 1
+        wanted = set(scroll_filter.must[0].match.any)
+        matches = [p for p in self._scroll_points if p.payload.get("def_name") in wanted]
+        return matches, None
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +145,10 @@ def test_extract_identifiers_excludes_plain_english_words():
 def test_local_retrieve_injects_def_name_exact_match(store, monkeypatch):
     monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
     vector_hit = _FakePoint("c1", "from foo import bar")
-    def_hit = _FakePoint("c2", "def _parse_extraction_response():\n    ...")
-    client = _FakeQdrant(
-        [vector_hit], scroll_results={"_parse_extraction_response": [def_hit]}
+    def_hit = _FakePoint(
+        "c2", "def _parse_extraction_response():\n    ...", def_name="_parse_extraction_response"
     )
+    client = _FakeQdrant([vector_hit], scroll_points=[def_hit])
 
     ctx = local_retrieve("what does _parse_extraction_response do", store, client)
 
@@ -146,7 +161,7 @@ def test_local_retrieve_def_name_match_deduped_with_vector_results(store, monkey
     same_text = "def local_retrieve():\n    ..."
     client = _FakeQdrant(
         [_FakePoint("c1", same_text)],
-        scroll_results={"local_retrieve": [_FakePoint("c2", same_text)]},
+        scroll_points=[_FakePoint("c2", same_text, def_name="local_retrieve")],
     )
 
     ctx = local_retrieve("explain local_retrieve", store, client)
@@ -165,6 +180,46 @@ def test_local_retrieve_no_identifiers_skips_def_name_lookup(store, monkeypatch)
 
     ctx = local_retrieve("what is this about", store, client)
     assert ctx.chunk_texts == ["hello world"]
+
+
+def test_local_retrieve_multi_piece_def_ordered_by_chunk_index(store, monkeypatch):
+    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    piece_1 = _FakePoint("c2", "piece one", def_name="big_function", chunk_index=1)
+    piece_0 = _FakePoint("c1", "piece zero", def_name="big_function", chunk_index=0)
+    # Returned out of order — scroll doesn't guarantee ordering.
+    client = _FakeQdrant([], scroll_points=[piece_1, piece_0])
+
+    ctx = local_retrieve("explain big_function", store, client)
+
+    assert ctx.chunk_texts == ["piece zero", "piece one"]
+
+
+def test_local_retrieve_repeated_identifier_frees_dedup_slot(store, monkeypatch):
+    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    hit_a = _FakePoint("ca", "alpha body", def_name="alpha_func", chunk_index=0)
+    hit_b = _FakePoint("cb", "beta body", def_name="beta_func", chunk_index=0)
+    client = _FakeQdrant([], scroll_points=[hit_a, hit_b])
+
+    question = "alpha_func alpha_func alpha_func alpha_func alpha_func beta_func"
+    ctx = local_retrieve(question, store, client)
+
+    assert "alpha body" in ctx.chunk_texts
+    assert "beta body" in ctx.chunk_texts
+
+
+def test_local_retrieve_single_scroll_call_for_multiple_identifiers(store, monkeypatch):
+    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    client = _FakeQdrant(
+        [],
+        scroll_points=[
+            _FakePoint("c1", "alpha body", def_name="alpha_func", chunk_index=0),
+            _FakePoint("c2", "beta body", def_name="beta_func", chunk_index=0),
+        ],
+    )
+
+    local_retrieve("alpha_func and beta_func together", store, client)
+
+    assert client.scroll_call_count == 1
 
 
 # ---------------------------------------------------------------------------

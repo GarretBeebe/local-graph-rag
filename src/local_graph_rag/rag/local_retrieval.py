@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchAny
 
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.embed import embed
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _MAX_ENTITIES = 20
 _MAX_RELATIONSHIPS = 40
 _MAX_IDENTIFIER_LOOKUPS = 5
+_MAX_PIECES_PER_DEF = 10  # generous cap on chunks-per-def for an oversized def
 
 # Tokens that "look like code": contain an underscore (snake_case / leading underscore)
 # or have a lower→upper case transition (CamelCase). This filters out ordinary English
@@ -37,17 +38,36 @@ def _extract_identifiers(question: str) -> list[str]:
     return [t for t in _IDENTIFIER_RE.findall(question) if "_" in t or _CAMEL_RE.search(t)]
 
 
-def _lookup_by_def_name(client: QdrantClient, def_name: str) -> list[str]:
-    """Exact-match a chunk whose def_name payload equals def_name, if any."""
+def _lookup_by_def_names(client: QdrantClient, def_names: list[str]) -> dict[str, list[str]]:
+    """Batch exact-match chunks whose def_name payload is in def_names.
+
+    Returns {def_name: [chunk_text, ...]}, each list ordered by chunk_index —
+    recovers original order for an oversized def split into multiple chunks.
+    """
+    if not def_names:
+        return {}
+
     points, _ = client.scroll(
         collection_name=COLLECTION,
         scroll_filter=Filter(
-            must=[FieldCondition(key="def_name", match=MatchValue(value=def_name))]
+            must=[FieldCondition(key="def_name", match=MatchAny(any=def_names))]
         ),
-        limit=1,
+        limit=_MAX_IDENTIFIER_LOOKUPS * _MAX_PIECES_PER_DEF,
         with_payload=True,
     )
-    return [p.payload["text"] for p in points if p.payload and "text" in p.payload]
+
+    by_def: dict[str, list[tuple[int, str]]] = {}
+    for p in points:
+        if not p.payload or "text" not in p.payload or "def_name" not in p.payload:
+            continue
+        by_def.setdefault(p.payload["def_name"], []).append(
+            (p.payload.get("chunk_index", 0), p.payload["text"])
+        )
+
+    return {
+        name: [text for _, text in sorted(pieces, key=lambda t: t[0])]
+        for name, pieces in by_def.items()
+    }
 
 
 def local_retrieve(
@@ -70,8 +90,12 @@ def local_retrieve(
             chunk_texts.append(point.payload["text"])
 
     seen_texts = set(chunk_texts)
-    for ident in _extract_identifiers(question)[:_MAX_IDENTIFIER_LOOKUPS]:
-        for text in _lookup_by_def_name(client, ident):
+    deduped_identifiers = list(dict.fromkeys(_extract_identifiers(question)))[
+        :_MAX_IDENTIFIER_LOOKUPS
+    ]
+    matches_by_def = _lookup_by_def_names(client, deduped_identifiers)
+    for ident in deduped_identifiers:
+        for text in matches_by_def.get(ident, []):
             if text not in seen_texts:
                 chunk_texts.append(text)
                 seen_texts.add(text)
