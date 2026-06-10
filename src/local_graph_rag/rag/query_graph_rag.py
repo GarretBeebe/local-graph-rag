@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 GraphMode = Literal["auto", "local", "global"]
 
 _LOCAL_PROMPT = """\
-Answer the question using the knowledge graph context below.
+Use the knowledge graph context below to answer the question. If the context is \
+missing, incomplete, or not relevant, answer using your own knowledge instead.
 
 Entities:
 {entity_block}
@@ -35,7 +36,8 @@ Question: {question}
 Answer:"""
 
 _GLOBAL_PROMPT = """\
-Answer the question using the community summaries below.
+Use the community summaries below to answer the question. If the summaries are \
+missing, incomplete, or not relevant, answer using your own knowledge instead.
 
 {summary_block}
 

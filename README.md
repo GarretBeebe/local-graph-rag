@@ -184,6 +184,10 @@ uv run graph-rag-query "What are the main themes in this codebase?" --mode globa
 if the LLM call fails or returns something unexpected) and picks local or global retrieval
 accordingly. Global mode falls back to local retrieval if no community summaries exist yet.
 
+Both local and global prompts allow the model to answer from its own knowledge when the
+retrieved graph context is empty, incomplete, or not relevant to the question — answers are
+not strictly limited to the indexed corpus.
+
 ---
 
 ## Project Layout

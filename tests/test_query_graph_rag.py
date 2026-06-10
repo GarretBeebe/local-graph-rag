@@ -133,5 +133,5 @@ def test_build_prompt_global_mode_falls_back_to_local_when_context_empty(store, 
 
     prompt = _build_prompt("anything", "global", store, _empty_qdrant())
 
-    assert "Answer the question using the knowledge graph context below." in prompt
-    assert "Answer the question using the community summaries below." not in prompt
+    assert "Use the knowledge graph context below to answer the question." in prompt
+    assert "Use the community summaries below to answer the question." not in prompt
