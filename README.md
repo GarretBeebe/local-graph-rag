@@ -8,7 +8,7 @@ Runs entirely on local hardware via [Ollama](https://ollama.ai) and
 
 > **Status:** Phases 1–6 complete. Ingestion pipeline, community detection, local/global
 > retrieval, and the OpenAI-compatible web server with full auth are all operational.
-> See [`docs/planning/graph-rag-plan.md`](docs/planning/graph-rag-plan.md) for the full implementation plan.
+> See [`notes/planning/graph-rag-plan.md`](notes/planning/graph-rag-plan.md) for the full implementation plan.
 
 ---
 
@@ -231,7 +231,7 @@ local-graph-rag/
 │   ├── test_query_graph_rag.py   # End-to-end query module tests
 │   ├── test_api_server.py        # API server auth + endpoint tests
 │   └── test_index_security.py    # Ingestion security (path traversal, size limits)
-├── docs/
+├── notes/
 │   ├── planning/                 # Architecture plans and punch lists
 │   └── security/                 # Security review notes
 ├── Dockerfile
