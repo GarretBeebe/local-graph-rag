@@ -38,46 +38,63 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _none_to_null(text: str) -> str:
+    """Replace bareword Python `None` with JSON `null` in clear value positions only.
+
+    Only matches `None` immediately after `:`, `,`, or `[` and immediately before
+    `,`, `}`, or `]` — i.e. where JSON requires a value, not inside string content.
+    Residual risk: a string containing literal ", None," at a value-boundary could
+    still be rewritten. Accepted because this only fires on already-invalid JSON as
+    last-resort recovery (stale-cache-replay only — see _candidates).
+    """
+    return re.sub(r"([:,\[]\s*)None(\s*[,}\]])", r"\1null\2", text)
+
+
+def _candidates(text: str) -> list[str]:
+    """Generate candidate JSON strings to try, in order of preference.
+
+    Candidates 2 and 4/5 below exist only to recover stale cached responses that
+    predate `format="json"` — fresh grammar-constrained output shouldn't need them
+    and they can be removed once such caches are no longer relevant.
+    """
+    out = [text]
+
+    # Candidate 2: model emitted '{}' followed by the real JSON on the next line.
+    if text.startswith("{}"):
+        remainder = text[2:].lstrip()
+        if remainder:
+            out.append(remainder)
+
+    # Candidate 3: extract first {...} block (handles leading/trailing prose).
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    block = match.group() if match else None
+    if block is not None and block != text:
+        out.append(block)
+
+    # Candidate 4: substitute None -> null on the full text.
+    fixed_text = _none_to_null(text)
+    if fixed_text != text:
+        out.append(fixed_text)
+
+    # Candidate 5: substitute None -> null on the isolated {...} block (if any).
+    if block is not None:
+        fixed_block = _none_to_null(block)
+        if fixed_block != block:
+            out.append(fixed_block)
+
+    return out
+
+
 def _parse_extraction_response(response: str) -> ExtractionResult:
     """Parse LLM output into an ExtractionResult. Falls back gracefully on bad JSON."""
     text = response.strip()
 
-    # Attempt 1: direct parse
-    try:
-        data = json.loads(text)
+    for candidate in _candidates(text):
+        try:
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
         return _dict_to_result(data)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Attempt 1b: model emitted '{}' followed by the real JSON on the next line
-    if text.startswith("{}"):
-        remainder = text[2:].lstrip()
-        if remainder:
-            try:
-                data = json.loads(remainder)
-                return _dict_to_result(data)
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-    # Attempt 2: extract first {...} block
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            return _dict_to_result(data)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    # Attempt 3: last resort - Python `None` where JSON needs `null`. Only fires
-    # after every well-formed-JSON attempt has failed, so this cannot corrupt
-    # otherwise-valid JSON. \b prevents matching inside words like "Noneable".
-    fixed = re.sub(r"\bNone\b", "null", text)
-    if fixed != text:
-        try:
-            data = json.loads(fixed)
-            return _dict_to_result(data)
-        except (json.JSONDecodeError, ValueError):
-            pass
 
     logger.warning(
         "Failed to parse extraction response; returning empty result. Response: %r", text[:200]
@@ -85,10 +102,17 @@ def _parse_extraction_response(response: str) -> ExtractionResult:
     return ExtractionResult()
 
 
-def _dict_to_result(data: dict) -> ExtractionResult:
-    entities = [e for e in data.get("entities", []) if isinstance(e, dict)]
-    relationships = [r for r in data.get("relationships", []) if isinstance(r, dict)]
-    return ExtractionResult(entities=entities, relationships=relationships)
+def _as_dict_list(value: object) -> list[dict]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _dict_to_result(data: object) -> ExtractionResult:
+    if not isinstance(data, dict):
+        return ExtractionResult()
+    return ExtractionResult(
+        entities=_as_dict_list(data.get("entities")),
+        relationships=_as_dict_list(data.get("relationships")),
+    )
 
 
 def _normalize_entities(entities: list[dict]) -> tuple[list[dict], set[str]]:
@@ -170,14 +194,20 @@ def extract_entities_for_file(
     all_relationships: list[dict] = []
 
     for i, batch_text in enumerate(batches):
-        if i in cached:
-            logger.debug("extraction cache hit for %s batch %d", filepath, i)
-            result = _parse_extraction_response(cached[i])
-        else:
-            prompt = _PROMPT_TEMPLATE.format(text=batch_text)
-            response = ollama_client.generate(prompt, EXTRACT_MODEL, format="json")
-            store.cache_extraction(filepath, i, response)
-            result = _parse_extraction_response(response)
+        try:
+            if i in cached:
+                logger.debug("extraction cache hit for %s batch %d", filepath, i)
+                result = _parse_extraction_response(cached[i])
+            else:
+                prompt = _PROMPT_TEMPLATE.format(text=batch_text)
+                response = ollama_client.generate(prompt, EXTRACT_MODEL, format="json")
+                store.cache_extraction(filepath, i, response)
+                result = _parse_extraction_response(response)
+        except Exception:
+            logger.exception(
+                "Extraction failed for %s batch %d; treating as empty", filepath, i
+            )
+            result = ExtractionResult()
 
         all_entities.extend(result.entities)
         all_relationships.extend(result.relationships)
