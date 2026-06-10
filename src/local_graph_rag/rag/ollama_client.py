@@ -86,13 +86,18 @@ def post_with_retry(
     raise RuntimeError(f"Ollama request to {path} failed after retries: {last_exc}")
 
 
-def _generate_payload(model: str, prompt: str, *, stream: bool) -> dict[str, Any]:
-    return {
+def _generate_payload(
+    model: str, prompt: str, *, stream: bool, format: str | None = None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "stream": stream,
         "options": {"num_ctx": OLLAMA_NUM_CTX},
     }
+    if format is not None:
+        payload["format"] = format
+    return payload
 
 
 @contextmanager
@@ -124,13 +129,14 @@ def generate(
     model: str,
     timeout: float = OLLAMA_GENERATE_TIMEOUT_SECONDS,
     cancel: threading.Event | None = None,
+    format: str | None = None,
 ) -> str:
     """Return a complete generated response from Ollama."""
     with _generation_slot(cancel=cancel, timeout=timeout):
         r = post_with_retry(
             "/api/generate",
             cancel=cancel,
-            json=_generate_payload(model, prompt, stream=False),
+            json=_generate_payload(model, prompt, stream=False, format=format),
             timeout=timeout,
         )
     try:

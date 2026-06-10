@@ -49,11 +49,32 @@ def _parse_extraction_response(response: str) -> ExtractionResult:
     except (json.JSONDecodeError, ValueError):
         pass
 
+    # Attempt 1b: model emitted '{}' followed by the real JSON on the next line
+    if text.startswith("{}"):
+        remainder = text[2:].lstrip()
+        if remainder:
+            try:
+                data = json.loads(remainder)
+                return _dict_to_result(data)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
     # Attempt 2: extract first {...} block
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         try:
             data = json.loads(match.group())
+            return _dict_to_result(data)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Attempt 3: last resort - Python `None` where JSON needs `null`. Only fires
+    # after every well-formed-JSON attempt has failed, so this cannot corrupt
+    # otherwise-valid JSON. \b prevents matching inside words like "Noneable".
+    fixed = re.sub(r"\bNone\b", "null", text)
+    if fixed != text:
+        try:
+            data = json.loads(fixed)
             return _dict_to_result(data)
         except (json.JSONDecodeError, ValueError):
             pass
@@ -154,7 +175,7 @@ def extract_entities_for_file(
             result = _parse_extraction_response(cached[i])
         else:
             prompt = _PROMPT_TEMPLATE.format(text=batch_text)
-            response = ollama_client.generate(prompt, EXTRACT_MODEL)
+            response = ollama_client.generate(prompt, EXTRACT_MODEL, format="json")
             store.cache_extraction(filepath, i, response)
             result = _parse_extraction_response(response)
 

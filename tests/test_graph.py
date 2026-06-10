@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from local_graph_rag.graph.extractor import ExtractionResult, _parse_extraction_response
+from local_graph_rag.graph.extractor import (
+    ExtractionResult,
+    _parse_extraction_response,
+    extract_entities_for_file,
+)
 from local_graph_rag.graph.store import GraphStore, slugify
 
 # ---------------------------------------------------------------------------
@@ -209,6 +213,25 @@ def test_extraction_cache_clear(store: GraphStore):
 
 
 # ---------------------------------------------------------------------------
+# extract_entities_for_file
+# ---------------------------------------------------------------------------
+
+
+def test_extract_entities_for_file_requests_json_format(store: GraphStore, monkeypatch):
+    captured: dict = {}
+
+    def _fake_generate(*args, **kwargs):
+        captured.update(kwargs)
+        return '{"entities": [], "relationships": []}'
+
+    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+
+    extract_entities_for_file(["some chunk text"], "foo.py", store)
+
+    assert captured.get("format") == "json"
+
+
+# ---------------------------------------------------------------------------
 # GraphStore — detect_communities
 # ---------------------------------------------------------------------------
 
@@ -295,3 +318,34 @@ def test_parse_empty_arrays():
     result = _parse_extraction_response('{"entities": [], "relationships": []}')
     assert result.entities == []
     assert result.relationships == []
+
+
+def test_parse_double_json_prefix_recovers_entity():
+    response = (
+        '{}\n{"entities": [{"name": "X", "type": "MODULE", "description": "x"}],'
+        ' "relationships": []}'
+    )
+    result = _parse_extraction_response(response)
+    assert len(result.entities) == 1
+    assert result.entities[0]["name"] == "X"
+
+
+def test_parse_python_none_recovers_via_null_substitution():
+    response = (
+        '{"entities": [{"name": "A", "type": "CLASS", "description": "a"},'
+        ' {"name": "B", "type": "CLASS", "description": "b"}],'
+        ' "relationships": [{"source": "A", "target": "B", "label": "uses", "extra": None}]}'
+    )
+    result = _parse_extraction_response(response)
+    assert len(result.entities) == 2
+    assert len(result.relationships) == 1
+    assert result.relationships[0]["target"] == "B"
+
+
+def test_parse_valid_json_with_none_word_in_string_untouched():
+    response = (
+        '{"entities": [{"name": "Finder", "type": "FUNCTION",'
+        ' "description": "Returns None if not found"}], "relationships": []}'
+    )
+    result = _parse_extraction_response(response)
+    assert result.entities[0]["description"] == "Returns None if not found"

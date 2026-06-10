@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 _GLOBAL_KEYWORDS = frozenset({
     "theme", "themes", "overview", "summarize", "summary",
-    "main", "overall", "across", "everything", "codebase", "project",
+    "main", "overall", "across", "everything", "codebase",
 })
 
 _ROUTER_PROMPT = """\

@@ -83,6 +83,7 @@ ignore_patterns:
   - .pytest_cache
   - .mypy_cache
   - .tox
+  - "*.egg-info"
 
   # Node
   - node_modules
@@ -95,10 +96,12 @@ ignore_patterns:
   - target
   - out
   - .next
+  - "*.min.js"
 
   # IDE
   - .idea
   - .vscode
+  - .claude
 
   # Secrets and credentials
   - .env
