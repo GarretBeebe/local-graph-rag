@@ -8,7 +8,13 @@ import uuid
 from pathlib import Path
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    PayloadSchemaType,
+    PointIdsList,
+    PointStruct,
+    VectorParams,
+)
 from tqdm import tqdm
 
 from local_graph_rag.common.paths import (
@@ -133,6 +139,11 @@ def ensure_collection(client: QdrantClient) -> None:
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
+    client.create_payload_index(
+        collection_name=COLLECTION,
+        field_name="def_name",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
     _collection_ensured = True
 
 
@@ -222,10 +233,11 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     if text is None:
         return "failed"
 
-    chunks = [c.strip() for c in chunk_document(path, text) if c.strip()]
-    if not chunks:
+    chunked = [(c.strip(), name) for c, name in chunk_document(path, text) if c.strip()]
+    if not chunked:
         logger.info("No chunks produced for %s — skipping", path)
         return "skipped"
+    chunks = [c for c, _ in chunked]
 
     try:
         vectors = embed_batch(chunks)
@@ -237,9 +249,9 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
         PointStruct(
             id=str(uuid.uuid4()),
             vector=vec,
-            payload={"text": chunk, "filepath": filepath, "chunk_index": i},
+            payload={"text": chunk, "filepath": filepath, "chunk_index": i, "def_name": def_name},
         )
-        for i, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True))
+        for i, ((chunk, def_name), vec) in enumerate(zip(chunked, vectors, strict=True))
     ]
 
     try:

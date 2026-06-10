@@ -1,8 +1,14 @@
 # Retrieval quality investigation — findings (2026-06-09)
 
-Findings/handoff doc from a debugging session. Design direction for Issue 2
-is settled but file-level implementation details aren't finalized — no code
-changes for Issue 2 yet.
+Findings/handoff doc from a debugging session.
+
+**Status (2026-06-10):** Both issues resolved at the code level. Issue 2's
+combined Option 1 + revised Option 2 design (below) is implemented and
+tested in worktree `retrieval-ranking` (branch `worktree-retrieval-ranking`).
+The live `.py` re-index (see "Re-index mechanics" below) has NOT yet been
+run against the shared `data/graph.db`/Qdrant collection — until it runs, no
+chunk in the live index has a `def_name` payload, so the new exact-match
+fallback is inert in production despite passing tests.
 
 ## Issue 1: Query misrouting — FIXED & DEPLOYED
 
@@ -23,7 +29,18 @@ never the actual source chunk.
 **Deployed:** `docker compose up -d --build api` — `graph-rag-api` rebuilt
 and healthy.
 
-## Issue 2: Embedding ranks import statements above definitions — DIAGNOSED, NOT FIXED
+## Issue 2: Embedding ranks import statements above definitions — RESOLVED (code+tests; re-index pending)
+
+**Resolution:** Implemented as "Option 1 + Option 2, revised" below —
+`chunk_python` drops bare `import`/`from...import` chunks entirely and tags
+every emitted chunk with its enclosing top-level `def`/`class` name
+(`def_name`); this is stored as a Qdrant `KEYWORD`-indexed payload field;
+`local_retrieval.py` extracts identifier-shaped tokens from the question and
+exact-matches them against `def_name`, injecting hits into `chunk_texts`. 13
+new tests in `tests/test_chunkers.py` + 3 new tests in `tests/test_retrieval.py`;
+ruff clean, 136/136 tests pass, build-validator GO. Remaining: live `.py`
+re-index (see "Re-index mechanics" below) to populate `def_name` in the
+production Qdrant collection.
 
 **Symptom:** after the routing fix, the same question now correctly uses
 *local* retrieval (response showed the `--[USES]-->` relationship format from
@@ -126,13 +143,12 @@ Targeted approach: for every `.py` path in `store.list_all_paths()`, call
 
 ## Next steps (pick up next session)
 
-1. Finalize file-level plan: `chunkers.py` (`chunk_python` tagging),
-   `index_documents.py` (payload + Qdrant payload-index creation in
-   `ensure_collection`), `local_retrieval.py` (new lookup function +
-   wiring into `local_retrieve`), settings if a new identifier-token regex
-   needs a constant.
-2. Get user approval on the combined Option 1 + revised Option 2 design.
-3. Implement, run targeted `.py` re-index, verify with the same live-Qdrant
-   query technique used above (def-chunk should now be retrievable via exact
+1. ~~Finalize file-level plan~~ — done. See
+   `/home/garret/.claude/plans/reflective-roaming-parasol.md`.
+2. ~~Get user approval on the combined Option 1 + revised Option 2 design~~ — done.
+3. ~~Implement~~ — done in worktree `retrieval-ranking`
+   (branch `worktree-retrieval-ranking`). Remaining: merge to main, then run
+   the targeted `.py` re-index and verify with the same live-Qdrant query
+   technique used above (def-chunk should now be retrievable via exact
    `def_name` match regardless of its cosine rank).
 4. Decide whether to re-run `summarizer` profile afterward.

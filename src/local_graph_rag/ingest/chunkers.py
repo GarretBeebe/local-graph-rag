@@ -10,7 +10,11 @@ on file extension:
   - all others       — recursive character splitting with a 500-character window
                        and 100-character overlap
 
-Public API: chunk_document(path, text) -> list[str]
+Public API: chunk_document(path, text) -> list[tuple[str, str | None]]
+
+Each item is (chunk_text, def_name). For .py files, def_name is the name of the
+top-level function/class the chunk belongs to (or None for module-level code,
+docstrings, and gaps). For all other file types, def_name is always None.
 """
 
 import ast
@@ -85,11 +89,11 @@ def chunk_text(text: str) -> list[str]:
 # -------------------------
 
 
-def chunk_python(text: str) -> list[str]:
+def chunk_python(text: str) -> list[tuple[str, str | None]]:
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
-        return chunk_text(text)
+        return [(c, None) for c in chunk_text(text)]
 
     lines = text.splitlines(keepends=True)
     total_lines = len(lines)
@@ -98,30 +102,39 @@ def chunk_python(text: str) -> list[str]:
         """Return stripped text for 1-based inclusive line range [start, end]."""
         return "".join(lines[start - 1 : end]).strip()
 
-    def _emit(segment: str, out: list[str]) -> None:
+    def _emit(segment: str, def_name: str | None, out: list[tuple[str, str | None]]) -> None:
         if segment:
-            out.extend(chunk_text(segment) if len(segment) > MAX_CHUNK_CHARS else [segment])
+            pieces = chunk_text(segment) if len(segment) > MAX_CHUNK_CHARS else [segment]
+            out.extend((p, def_name) for p in pieces)
 
-    chunks: list[str] = []
+    chunks: list[tuple[str, str | None]] = []
     prev_end = 0
 
     for node in tree.body:
         # Emit any gap (imports, assignments, comments) before this node.
         if node.lineno > prev_end + 1:
-            _emit(_span(prev_end + 1, node.lineno - 1), chunks)
+            _emit(_span(prev_end + 1, node.lineno - 1), None, chunks)
 
-        # Emit the node itself.
+        # Bare import statements carry ~no "what does X do" signal for any query —
+        # skip emitting them as standalone chunks entirely.
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            prev_end = node.end_lineno
+            continue
+
+        # Emit the node itself, tagged with its def/class name if applicable.
         segment = (
             ast.get_source_segment(text, node) or "".join(lines[node.lineno - 1 : node.end_lineno])
         ).strip()
-        _emit(segment, chunks)
+        is_def = isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        def_name = node.name if is_def else None
+        _emit(segment, def_name, chunks)
         prev_end = node.end_lineno
 
     # Emit any trailing code after the last node.
     if prev_end < total_lines:
-        _emit(_span(prev_end + 1, total_lines), chunks)
+        _emit(_span(prev_end + 1, total_lines), None, chunks)
 
-    return chunks if chunks else chunk_text(text)
+    return chunks if chunks else [(c, None) for c in chunk_text(text)]
 
 
 # -------------------------
@@ -195,7 +208,7 @@ def chunk_markdown(text: str) -> list[str]:
 # -------------------------
 
 
-def chunk_document(path: Path, text: str) -> list[str]:
+def chunk_document(path: Path, text: str) -> list[tuple[str, str | None]]:
 
     suffix = path.suffix.lower()
 
@@ -203,6 +216,6 @@ def chunk_document(path: Path, text: str) -> list[str]:
         return chunk_python(text)
 
     if suffix in {".md", ".markdown"}:
-        return chunk_markdown(text)
+        return [(c, None) for c in chunk_markdown(text)]
 
-    return chunk_text(text)
+    return [(c, None) for c in chunk_text(text)]

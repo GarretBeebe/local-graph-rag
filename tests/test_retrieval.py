@@ -5,7 +5,7 @@ import pytest
 
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.global_retrieval import GlobalContext, global_retrieve
-from local_graph_rag.rag.local_retrieval import LocalContext, local_retrieve
+from local_graph_rag.rag.local_retrieval import LocalContext, _extract_identifiers, local_retrieve
 
 
 @pytest.fixture
@@ -27,8 +27,13 @@ class _FakePoint:
 
 
 class _FakeQdrant:
-    def __init__(self, points: list[_FakePoint]):
+    def __init__(
+        self,
+        points: list[_FakePoint],
+        scroll_results: dict[str, list[_FakePoint]] | None = None,
+    ):
         self._points = points
+        self._scroll_results = scroll_results or {}
 
     def query_points(self, *args, **kwargs):
         class _Result:
@@ -37,6 +42,10 @@ class _FakeQdrant:
         r = _Result()
         r.points = self._points
         return r
+
+    def scroll(self, *, scroll_filter, **kwargs):
+        def_name = scroll_filter.must[0].match.value
+        return self._scroll_results.get(def_name, []), None
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +97,74 @@ def test_local_retrieve_returns_empty_on_no_results(store, monkeypatch):
     client = _FakeQdrant([])
     ctx = local_retrieve("q", store, client)
     assert ctx == LocalContext()
+
+
+# ---------------------------------------------------------------------------
+# _extract_identifiers
+# ---------------------------------------------------------------------------
+
+
+def test_extract_identifiers_leading_underscore():
+    assert "_parse_extraction_response" in _extract_identifiers(
+        "what does _parse_extraction_response do"
+    )
+
+
+def test_extract_identifiers_snake_case():
+    assert "local_retrieve" in _extract_identifiers("explain local_retrieve please")
+
+
+def test_extract_identifiers_camel_case():
+    assert "GraphStore" in _extract_identifiers("what is GraphStore for")
+
+
+def test_extract_identifiers_excludes_plain_english_words():
+    assert _extract_identifiers("What does this function do") == []
+
+
+# ---------------------------------------------------------------------------
+# local_retrieve — def_name exact-match lookup
+# ---------------------------------------------------------------------------
+
+
+def test_local_retrieve_injects_def_name_exact_match(store, monkeypatch):
+    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    vector_hit = _FakePoint("c1", "from foo import bar")
+    def_hit = _FakePoint("c2", "def _parse_extraction_response():\n    ...")
+    client = _FakeQdrant(
+        [vector_hit], scroll_results={"_parse_extraction_response": [def_hit]}
+    )
+
+    ctx = local_retrieve("what does _parse_extraction_response do", store, client)
+
+    assert "from foo import bar" in ctx.chunk_texts
+    assert "def _parse_extraction_response():\n    ..." in ctx.chunk_texts
+
+
+def test_local_retrieve_def_name_match_deduped_with_vector_results(store, monkeypatch):
+    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    same_text = "def local_retrieve():\n    ..."
+    client = _FakeQdrant(
+        [_FakePoint("c1", same_text)],
+        scroll_results={"local_retrieve": [_FakePoint("c2", same_text)]},
+    )
+
+    ctx = local_retrieve("explain local_retrieve", store, client)
+
+    assert ctx.chunk_texts.count(same_text) == 1
+
+
+def test_local_retrieve_no_identifiers_skips_def_name_lookup(store, monkeypatch):
+    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    client = _FakeQdrant([_FakePoint("c1", "hello world")])
+
+    def _fail_scroll(*args, **kwargs):
+        raise AssertionError("scroll should not be called when no identifiers are present")
+
+    client.scroll = _fail_scroll
+
+    ctx = local_retrieve("what is this about", store, client)
+    assert ctx.chunk_texts == ["hello world"]
 
 
 # ---------------------------------------------------------------------------
