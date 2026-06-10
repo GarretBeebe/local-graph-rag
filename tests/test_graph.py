@@ -231,6 +231,41 @@ def test_extract_entities_for_file_requests_json_format(store: GraphStore, monke
     assert captured.get("format") == "json"
 
 
+def test_extract_entities_for_file_isolates_batch_failure(store: GraphStore, monkeypatch):
+    """A bad batch must not abort the whole file or skip caching prior batches.
+
+    Forces 2 batches (one chunk each) by shrinking EXTRACT_BATCH_TOKENS to 1. The
+    first batch's response is cached and contributes its entity; the second
+    batch's generate() raises, degrading to an empty result for that batch only —
+    and isn't cached, so it retries on the next run.
+    """
+    monkeypatch.setattr("local_graph_rag.graph.extractor.EXTRACT_BATCH_TOKENS", 1)
+
+    call_count = 0
+
+    def _fake_generate(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return (
+                '{"entities": [{"name": "Alpha", "type": "CLASS", "description": "a"}],'
+                ' "relationships": []}'
+            )
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+
+    result = extract_entities_for_file(
+        ["alpha entity chunk", "beta entity chunk"], "foo.py", store
+    )
+
+    assert [e["name"] for e in result.entities] == ["Alpha"]
+
+    cached = store.get_cached_extractions("foo.py")
+    assert 0 in cached
+    assert 1 not in cached
+
+
 # ---------------------------------------------------------------------------
 # GraphStore — detect_communities
 # ---------------------------------------------------------------------------
@@ -349,3 +384,29 @@ def test_parse_valid_json_with_none_word_in_string_untouched():
     )
     result = _parse_extraction_response(response)
     assert result.entities[0]["description"] == "Returns None if not found"
+
+
+def test_parse_non_dict_top_level_returns_empty():
+    for response in ("null", "[1, 2, 3]"):
+        result = _parse_extraction_response(response)
+        assert result.entities == []
+        assert result.relationships == []
+
+
+def test_parse_dict_with_non_list_entities_returns_empty():
+    for response in (
+        '{"entities": null, "relationships": []}',
+        '{"entities": 5, "relationships": []}',
+    ):
+        result = _parse_extraction_response(response)
+        assert result.entities == []
+
+
+def test_parse_prose_with_embedded_none_recovers_via_block_substitution():
+    response = (
+        'Here is the result: {"entities": [], "relationships": '
+        '[{"source": "A", "target": "B", "label": "uses", "extra": None}]}'
+    )
+    result = _parse_extraction_response(response)
+    assert len(result.relationships) == 1
+    assert result.relationships[0]["target"] == "B"
