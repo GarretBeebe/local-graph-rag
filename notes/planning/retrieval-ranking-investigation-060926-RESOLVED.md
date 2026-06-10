@@ -2,13 +2,46 @@
 
 Findings/handoff doc from a debugging session.
 
-**Status (2026-06-10):** Both issues resolved at the code level. Issue 2's
-combined Option 1 + revised Option 2 design (below) is implemented and
-tested in worktree `retrieval-ranking` (branch `worktree-retrieval-ranking`).
-The live `.py` re-index (see "Re-index mechanics" below) has NOT yet been
-run against the shared `data/graph.db`/Qdrant collection — until it runs, no
-chunk in the live index has a `def_name` payload, so the new exact-match
-fallback is inert in production despite passing tests.
+**Status (2026-06-10): CLOSED — fully verified end-to-end.** Both issues resolved at the code
+level (merged to `main` via `ba4dabb`/`3b208c7`) and confirmed against the
+live `data/graph.db`/Qdrant collection. The `.py` re-index needed an
+unplanned detour first — `local-graph-rag:latest` predated today's commits
+(built 2026-06-09 22:20, before `ba4dabb`/`3b208c7`), so the first re-index
+pass ran with the old chunker and produced zero `def_name` payloads. After
+`docker compose build indexer`, dropping `.py` fingerprints again, and
+re-running the indexer (128 indexed / 135 skipped / 0 failed), a direct
+Qdrant scroll confirms `def_name='_parse_extraction_response'` returns
+exactly the function-definition chunk (`extractor.py` chunk_index=8), bare
+import chunks are gone, and the oversized `extract_entities_for_file`
+correctly spans 6 chunks sharing one `def_name`.
+
+File coverage: 243/263 configured files fingerprinted. The 20 missing are
+all 0-byte `__init__.py` files across every indexed project — confirmed via
+`wc -c`, root-caused to `index_documents.py:245-247`
+(`if not chunked: return "skipped"` without writing a fingerprint). Harmless
+(nothing to index in an empty file) and pre-existing — identical before and
+after today's rebuild, not a regression.
+
+**End-to-end re-verification (2026-06-10):** `api` was rebuilt
+(`docker compose up -d --build api`, post-`3b208c7` image, healthy). The
+summarizer's first run hit an unrelated `HTTP 404` on community 40 —
+`SUMMARIZE_MODEL` defaults to `qwen2.5:7b`, which wasn't pulled in this
+Ollama instance (a pre-existing gap, unrelated to today's chunking work,
+that just hadn't surfaced before since the summarizer profile hadn't been
+run here). After pulling the model and re-running, all 104/104 communities
+summarized successfully.
+
+Re-ran the original motivating query — `POST /v1/chat/completions`,
+`graph_mode=auto`, "tell me what `_parse_extraction_response` within the
+local-graph-rag project does" — and got an accurate description of the
+function's actual fallback-parsing behavior (tries JSON candidates in turn,
+falls back to an empty `ExtractionResult` with a warning if none parse).
+Checked against the live source (`extractor.py:93-107`): every substantive
+claim in the answer is correct.
+
+**Known minor issue (non-blocking):** a lone `@dataclass` line is emitted as
+its own `def_name=None` chunk, separated from the class it decorates
+(`extractor.py` chunk_index=3 vs `ExtractionResult` at chunk_index=4).
 
 ## Issue 1: Query misrouting — FIXED & DEPLOYED
 
@@ -38,9 +71,8 @@ every emitted chunk with its enclosing top-level `def`/`class` name
 `local_retrieval.py` extracts identifier-shaped tokens from the question and
 exact-matches them against `def_name`, injecting hits into `chunk_texts`. 13
 new tests in `tests/test_chunkers.py` + 3 new tests in `tests/test_retrieval.py`;
-ruff clean, 136/136 tests pass, build-validator GO. Remaining: live `.py`
-re-index (see "Re-index mechanics" below) to populate `def_name` in the
-production Qdrant collection.
+ruff clean, 136/136 tests pass, build-validator GO. Verified live in the
+production Qdrant collection on 2026-06-10 — see Status above.
 
 **Symptom:** after the routing fix, the same question now correctly uses
 *local* retrieval (response showed the `--[USES]-->` relationship format from
@@ -141,14 +173,13 @@ Targeted approach: for every `.py` path in `store.list_all_paths()`, call
   summarizer` afterward so community summaries stay consistent with the
   rebuilt entity graph.
 
-## Next steps (pick up next session)
+## Next steps
 
-1. ~~Finalize file-level plan~~ — done. See
-   `/home/garret/.claude/plans/reflective-roaming-parasol.md`.
+1. ~~Finalize file-level plan~~ — done.
 2. ~~Get user approval on the combined Option 1 + revised Option 2 design~~ — done.
-3. ~~Implement~~ — done in worktree `retrieval-ranking`
-   (branch `worktree-retrieval-ranking`). Remaining: merge to main, then run
-   the targeted `.py` re-index and verify with the same live-Qdrant query
-   technique used above (def-chunk should now be retrievable via exact
-   `def_name` match regardless of its cosine rank).
-4. Decide whether to re-run `summarizer` profile afterward.
+3. ~~Implement, merge, re-index, verify live~~ — done (2026-06-10). See
+   Status above for the rebuild detour and verification results.
+4. ~~Rebuild/restart `api`~~ — done (2026-06-10).
+5. ~~Re-run `summarizer` profile~~ — done (2026-06-10), 104/104 communities.
+
+Investigation complete.
