@@ -165,6 +165,11 @@ Three authentication paths are supported:
 OpenAI-compatible clients. When using Chatbox, point it at `http://localhost:8000` and set the
 API key to match.
 
+If connecting from a browser or webview-based client (e.g. Chatbox mobile), also set
+`CORS_ORIGINS` in `.env`. Without it, such clients can fail with "Failed to fetch" even though
+`curl` against the same endpoint returns `200 OK` — the request succeeds server-side but the
+response is missing the CORS header the client requires.
+
 Authorization is intentionally coarse-grained for this local implementation: any authenticated
 user can query the full indexed corpus. Do not use this as a multi-tenant RBAC system.
 
