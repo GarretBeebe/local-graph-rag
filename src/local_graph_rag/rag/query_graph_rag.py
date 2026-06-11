@@ -19,27 +19,11 @@ logger = logging.getLogger(__name__)
 
 GraphMode = Literal["auto", "local", "global"]
 
-_LOCAL_PROMPT = """\
-Use the knowledge graph context below to answer the question. If the context is \
-missing, incomplete, or not relevant, answer using your own knowledge instead.
+_PROMPT = """\
+Use the context below to answer the question. If the context is missing, incomplete, \
+or not relevant, answer using your own knowledge instead.
 
-Entities:
-{entity_block}
-
-Relationships:
-{relationship_block}
-
-Supporting text:
-{chunk_block}
-
-Question: {question}
-Answer:"""
-
-_GLOBAL_PROMPT = """\
-Use the community summaries below to answer the question. If the summaries are \
-missing, incomplete, or not relevant, answer using your own knowledge instead.
-
-{summary_block}
+{context_block}
 
 Question: {question}
 Answer:"""
@@ -68,12 +52,12 @@ def _format_local(ctx: LocalContext, question: str) -> str:
         parts.append(text)
         total += len(text)
     chunk_block = "\n\n".join(parts) or "(none)"
-    return _LOCAL_PROMPT.format(
-        entity_block=entity_block,
-        relationship_block=rel_block,
-        chunk_block=chunk_block,
-        question=question,
+    context_block = (
+        f"Entities:\n{entity_block}\n\n"
+        f"Relationships:\n{rel_block}\n\n"
+        f"Supporting text:\n{chunk_block}"
     )
+    return _PROMPT.format(context_block=context_block, question=question)
 
 
 def _format_global(ctx: GlobalContext, question: str) -> str:
@@ -81,7 +65,7 @@ def _format_global(ctx: GlobalContext, question: str) -> str:
         f"Community {cid}:\n{summary}"
         for cid, summary in zip(ctx.community_ids, ctx.community_summaries, strict=True)
     )
-    return _GLOBAL_PROMPT.format(summary_block=summary_block, question=question)
+    return _PROMPT.format(context_block=summary_block, question=question)
 
 
 def _build_prompt(
