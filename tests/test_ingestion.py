@@ -3,9 +3,10 @@
 import hashlib
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from qdrant_client.models import PayloadSchemaType, PointStruct
+from qdrant_client.models import Distance, PayloadSchemaType, PointStruct, VectorParams
 
 import local_graph_rag.ingest.index_documents as _idx_mod
 from local_graph_rag.graph.store import GraphStore
@@ -16,6 +17,7 @@ from local_graph_rag.ingest.index_documents import (
     _write_index_data,
     ensure_collection,
 )
+from tests.helpers import EMPTY_EXTRACTION_JSON, patch_ollama_generate
 
 # ---------------------------------------------------------------------------
 # GraphStore — fingerprints
@@ -125,8 +127,10 @@ def test_collect_files_raises_runtime_error_on_config_load_failure(
 
 
 class _FakeQdrant:
-    def __init__(self, exists=False):
+    def __init__(self, exists=False, vector_size: int = 768, distance=Distance.COSINE):
         self._exists = exists
+        self._vector_size = vector_size
+        self._distance = distance
         self.created_collection = False
         self.payload_index_calls: list[dict] = []
         self.upserts: list[dict] = []
@@ -136,6 +140,15 @@ class _FakeQdrant:
 
     def create_collection(self, **kwargs):
         self.created_collection = True
+
+    def get_collection(self, **kwargs):
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(
+                    vectors=VectorParams(size=self._vector_size, distance=self._distance)
+                )
+            )
+        )
 
     def create_payload_index(self, **kwargs):
         self.payload_index_calls.append(kwargs)
@@ -156,6 +169,16 @@ def test_ensure_collection_creates_payload_index(monkeypatch: pytest.MonkeyPatch
         call = client.payload_index_calls[0]
         assert call["field_name"] == "def_name"
         assert call["field_schema"] == PayloadSchemaType.KEYWORD
+
+
+def test_ensure_collection_rejects_mismatched_existing_vector_size(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(_idx_mod, "_collection_ensured", False)
+    client = _FakeQdrant(exists=True, vector_size=123)
+
+    with pytest.raises(RuntimeError, match="vector config"):
+        ensure_collection(client)
 
 
 def _make_points(chunks: list[str], filepath: str) -> list[PointStruct]:
@@ -183,10 +206,10 @@ def test_write_index_data_skips_hash_on_extraction_failure(
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return '{"entities": [], "relationships": []}'
+            return EMPTY_EXTRACTION_JSON
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+    patch_ollama_generate(monkeypatch, _fake_generate)
 
     chunks = ["alpha entity chunk", "beta entity chunk"]
     points = _make_points(chunks, "foo.py")
@@ -199,10 +222,7 @@ def test_write_index_data_skips_hash_on_extraction_failure(
 def test_write_index_data_sets_hash_on_full_success(
     store: GraphStore, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(
-        "local_graph_rag.rag.ollama_client.generate",
-        lambda *a, **k: '{"entities": [], "relationships": []}',
-    )
+    patch_ollama_generate(monkeypatch, lambda *a, **k: EMPTY_EXTRACTION_JSON)
 
     chunks = ["alpha entity chunk"]
     points = _make_points(chunks, "foo.py")

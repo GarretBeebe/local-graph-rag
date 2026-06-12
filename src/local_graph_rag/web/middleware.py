@@ -1,6 +1,5 @@
 """Auth and security middleware for the Graph RAG API."""
 
-import ipaddress
 import logging
 import uuid
 from collections.abc import Callable
@@ -9,43 +8,12 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
-from local_graph_rag.settings import ALLOW_INSECURE_LOCALONLY, TRUSTED_PROXY_IPS
+from local_graph_rag.settings import ALLOW_INSECURE_LOCALONLY
 from local_graph_rag.web.auth import is_valid_token
 from local_graph_rag.web.rate_limit import check_login_rate_limit, check_rate_limit
+from local_graph_rag.web.security import extract_bearer_token, resolve_client_ip
 
 logger = logging.getLogger(__name__)
-
-_AUTH_COOKIE = "rag_token"
-
-
-def resolve_client_ip(request: Request) -> str:
-    peer = request.client.host if request.client else "unknown"
-    if peer in TRUSTED_PROXY_IPS:
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        first = forwarded.split(",", 1)[0].strip()
-        if first:
-            try:
-                ipaddress.ip_address(first)
-                return first
-            except ValueError:
-                pass
-    return peer
-
-
-def _extract_bearer_token(request: Request) -> str:
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    return token or request.cookies.get(_AUTH_COOKIE, "")
-
-
-def _is_secure_request(request: Request) -> bool:
-    """Return True if HTTPS; trusts X-Forwarded-Proto only from TRUSTED_PROXY_IPS."""
-    if request.url.scheme == "https":
-        return True
-    peer = request.client.host if request.client else ""
-    if peer in TRUSTED_PROXY_IPS:
-        proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        return proto == "https"
-    return False
 
 
 async def security_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
@@ -77,7 +45,7 @@ async def security_middleware(request: Request, call_next: Callable[..., Any]) -
     if request.url.path == "/auth/status":
         return await call_next(request)
 
-    if not ALLOW_INSECURE_LOCALONLY and not is_valid_token(_extract_bearer_token(request)):
+    if not ALLOW_INSECURE_LOCALONLY and not is_valid_token(extract_bearer_token(request)):
         return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
     return await call_next(request)

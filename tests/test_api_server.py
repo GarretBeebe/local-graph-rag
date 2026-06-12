@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from local_graph_rag.common.sqlite_store import SqliteStore
+from tests.helpers import CHAT_COMPLETIONS_PATH, bearer_headers, chat_payload
 
 _TEST_API_KEY = "test-bearer-key-abc"
 
@@ -74,7 +75,7 @@ def test_healthz_is_public(authed_client):
 def test_root_redirects_to_ui(authed_client):
     res = authed_client.get(
         "/",
-        headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+        headers=bearer_headers(_TEST_API_KEY),
         follow_redirects=False,
     )
     assert res.status_code in (301, 302, 307, 308)
@@ -82,7 +83,7 @@ def test_root_redirects_to_ui(authed_client):
 
 
 def test_auth_status_valid_bearer_returns_true(authed_client):
-    res = authed_client.get("/auth/status", headers={"Authorization": f"Bearer {_TEST_API_KEY}"})
+    res = authed_client.get("/auth/status", headers=bearer_headers(_TEST_API_KEY))
     assert res.status_code == 200
     assert res.json()["authenticated"] is True
 
@@ -106,17 +107,17 @@ def test_auth_status_insecure_local_bypasses_check(insecure_client):
 
 def test_chat_no_token_returns_401(authed_client):
     res = authed_client.post(
-        "/v1/chat/completions",
-        json={"model": "test", "messages": [{"role": "user", "content": "hi"}]},
+        CHAT_COMPLETIONS_PATH,
+        json=chat_payload(),
     )
     assert res.status_code == 401
 
 
 def test_chat_invalid_bearer_returns_401(authed_client):
     res = authed_client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer wrong-key"},
-        json={"model": "test", "messages": [{"role": "user", "content": "hi"}]},
+        CHAT_COMPLETIONS_PATH,
+        headers=bearer_headers("wrong-key"),
+        json=chat_payload(),
     )
     assert res.status_code == 401
 
@@ -131,7 +132,7 @@ def test_models_valid_bearer_returns_list(authed_client):
         mock_get.return_value.raise_for_status = MagicMock()
         mock_get.return_value.json.return_value = {"models": [{"name": "test-model"}]}
         res = authed_client.get(
-            "/v1/models", headers={"Authorization": f"Bearer {_TEST_API_KEY}"}
+            "/v1/models", headers=bearer_headers(_TEST_API_KEY)
         )
     assert res.status_code == 200
     assert "data" in res.json()
@@ -150,6 +151,15 @@ def test_login_invalid_credentials_returns_401(authed_client):
     assert res.status_code == 401
 
 
+def test_login_rejects_password_over_bcrypt_byte_limit(authed_client):
+    res = authed_client.post(
+        "/auth/login",
+        json={"username": "nobody", "password": "a" * 73},
+    )
+    assert res.status_code == 400
+    assert "bcrypt" in res.json()["detail"]
+
+
 def test_logout_always_succeeds(authed_client):
     res = authed_client.post("/auth/logout")
     assert res.status_code == 200
@@ -162,8 +172,8 @@ def test_logout_always_succeeds(authed_client):
 
 def test_chat_missing_user_message_returns_400(insecure_client):
     res = insecure_client.post(
-        "/v1/chat/completions",
-        json={"model": "test", "messages": [{"role": "system", "content": "sys"}]},
+        CHAT_COMPLETIONS_PATH,
+        json=chat_payload("sys", role="system"),
     )
     assert res.status_code == 400
 
@@ -173,8 +183,8 @@ def test_chat_graph_mode_defaults_to_auto(insecure_client):
     with patch("local_graph_rag.web.rag_executor.ask") as mock_ask:
         mock_ask.return_value = "answer"
         res = insecure_client.post(
-            "/v1/chat/completions",
-            json={"model": "test", "messages": [{"role": "user", "content": "hi"}]},
+            CHAT_COMPLETIONS_PATH,
+            json=chat_payload(),
         )
     assert res.status_code == 200
     assert mock_ask.call_args[0][2] == "auto"
@@ -185,11 +195,7 @@ def test_chat_explicit_graph_mode_is_forwarded(insecure_client):
     with patch("local_graph_rag.web.rag_executor.ask") as mock_ask:
         mock_ask.return_value = "answer"
         insecure_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "test",
-                "messages": [{"role": "user", "content": "hi"}],
-                "graph_mode": "local",
-            },
+            CHAT_COMPLETIONS_PATH,
+            json=chat_payload(graph_mode="local"),
         )
     assert mock_ask.call_args[0][2] == "local"

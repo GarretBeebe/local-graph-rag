@@ -166,20 +166,7 @@ def _normalize_relationships(relationships: list[dict], valid_slugs: set[str]) -
     return result
 
 
-def extract_entities_for_file(
-    chunks: list[str],
-    filepath: str,
-    store: GraphStore,
-) -> ExtractionResult:
-    """Extract entities and relationships from all chunks of a file.
-
-    Batches chunks to stay within EXTRACT_BATCH_TOKENS. Caches each batch result in
-    the store so interrupted runs resume without redundant LLM calls.
-    """
-    if not chunks:
-        return ExtractionResult()
-
-    # Build batches
+def _build_batches(chunks: list[str]) -> list[str]:
     batches: list[str] = []
     current_parts: list[str] = []
     current_tokens = 0
@@ -193,7 +180,54 @@ def extract_entities_for_file(
         current_tokens += chunk_tokens
     if current_parts:
         batches.append("\n\n---\n\n".join(current_parts))
+    return batches
 
+
+def _load_or_extract_batch(
+    batch_text: str,
+    batch_index: int,
+    filepath: str,
+    cached: dict[int, str],
+    store: GraphStore,
+) -> ExtractionResult:
+    if batch_index in cached:
+        logger.debug("extraction cache hit for %s batch %d", filepath, batch_index)
+        return _parse_extraction_response(cached[batch_index])
+
+    prompt = _PROMPT_TEMPLATE.format(text=batch_text)
+    response = ollama_client.generate(prompt, EXTRACT_MODEL, format="json")
+    store.cache_extraction(filepath, batch_index, response)
+    return _parse_extraction_response(response)
+
+
+def _normalize_extraction_result(
+    entities: list[dict],
+    relationships: list[dict],
+    *,
+    had_failure: bool,
+) -> ExtractionResult:
+    normalized_entities, valid_slugs = _normalize_entities(entities)
+    return ExtractionResult(
+        entities=normalized_entities,
+        relationships=_normalize_relationships(relationships, valid_slugs),
+        had_failure=had_failure,
+    )
+
+
+def extract_entities_for_file(
+    chunks: list[str],
+    filepath: str,
+    store: GraphStore,
+) -> ExtractionResult:
+    """Extract entities and relationships from all chunks of a file.
+
+    Batches chunks to stay within EXTRACT_BATCH_TOKENS. Caches each batch result in
+    the store so interrupted runs resume without redundant LLM calls.
+    """
+    if not chunks:
+        return ExtractionResult()
+
+    batches = _build_batches(chunks)
     cached = store.get_cached_extractions(filepath)
     all_entities: list[dict] = []
     all_relationships: list[dict] = []
@@ -201,14 +235,7 @@ def extract_entities_for_file(
 
     for i, batch_text in enumerate(batches):
         try:
-            if i in cached:
-                logger.debug("extraction cache hit for %s batch %d", filepath, i)
-                result = _parse_extraction_response(cached[i])
-            else:
-                prompt = _PROMPT_TEMPLATE.format(text=batch_text)
-                response = ollama_client.generate(prompt, EXTRACT_MODEL, format="json")
-                store.cache_extraction(filepath, i, response)
-                result = _parse_extraction_response(response)
+            result = _load_or_extract_batch(batch_text, i, filepath, cached, store)
         except Exception:
             logger.exception(
                 "Extraction failed for %s batch %d; treating as empty", filepath, i
@@ -219,11 +246,8 @@ def extract_entities_for_file(
         all_entities.extend(result.entities)
         all_relationships.extend(result.relationships)
 
-    normalized_entities, valid_slugs = _normalize_entities(all_entities)
-    normalized_relationships = _normalize_relationships(all_relationships, valid_slugs)
-
-    return ExtractionResult(
-        entities=normalized_entities,
-        relationships=normalized_relationships,
+    return _normalize_extraction_result(
+        all_entities,
+        all_relationships,
         had_failure=any_failure,
     )

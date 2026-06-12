@@ -7,6 +7,7 @@ import sys
 import numpy as np
 
 import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.common.logging import configure_cli_logging
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.embed import embed
 from local_graph_rag.settings import SUMMARIZE_MODEL
@@ -140,7 +141,7 @@ def summarize_all_communities(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
+    configure_cli_logging()
     force = "--force" in sys.argv
     store = GraphStore()
     try:

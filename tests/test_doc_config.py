@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from local_graph_rag.ingest.doc_config import load_index_config
+from tests.helpers import patch_index_config_path
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -19,7 +20,7 @@ def _write_config(tmp_path: Path, content: str) -> Path:
 
 
 def test_returns_none_when_not_configured(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", "")
+    patch_index_config_path(monkeypatch, "")
     assert load_index_config() is None
 
 
@@ -37,9 +38,7 @@ index_paths:
     recursive: true
 """,
     )
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert len(cfg.index_paths) == 1
@@ -58,9 +57,7 @@ index_paths:
     exclude_dirs: [.git, .venv, node_modules]
 """,
     )
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert cfg.index_paths[0].exclude_dirs == frozenset({".git", ".venv", "node_modules"})
@@ -75,9 +72,7 @@ index_paths:
 allowed_extensions: [.md, .txt, py]
 """,
     )
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert ".md" in cfg.allowed_extensions
@@ -87,9 +82,7 @@ allowed_extensions: [.md, .txt, py]
 
 def test_uses_default_extensions_when_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = _write_config(tmp_path, "index_paths:\n  - path: /docs\n")
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert ".md" in cfg.allowed_extensions
@@ -106,9 +99,7 @@ ignore_patterns:
   - "*.key"
 """,
     )
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert ".git" in cfg.ignore_patterns
@@ -122,9 +113,7 @@ def test_real_config_excludes_claude_globally(monkeypatch: pytest.MonkeyPatch):
     path's exclude_dirs, leaving it unexcluded under the other 7 index paths.
     """
     real_config = Path(__file__).parent.parent / "config" / "index_config.yaml"
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(real_config)
-    )
+    patch_index_config_path(monkeypatch, real_config)
     cfg = load_index_config()
     assert cfg is not None
     assert ".claude" in cfg.ignore_patterns
@@ -132,9 +121,7 @@ def test_real_config_excludes_claude_globally(monkeypatch: pytest.MonkeyPatch):
 
 def test_roots_resolves_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = _write_config(tmp_path, f"index_paths:\n  - path: {tmp_path}\n")
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert tmp_path.resolve() in cfg.roots
@@ -147,9 +134,7 @@ def test_roots_resolves_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_raises_on_empty_index_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = _write_config(tmp_path, "index_paths: []\n")
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     with pytest.raises(ValueError, match="no index_paths"):
         load_index_config()
 
@@ -157,18 +142,13 @@ def test_raises_on_empty_index_paths(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_raises_on_invalid_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = tmp_path / "index_config.yaml"
     cfg_path.write_text("index_paths: [\nunclosed bracket")
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     with pytest.raises(ValueError, match="invalid YAML"):
         load_index_config()
 
 
 def test_raises_on_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH",
-        str(tmp_path / "nonexistent.yaml"),
-    )
+    patch_index_config_path(monkeypatch, tmp_path / "nonexistent.yaml")
     with pytest.raises(FileNotFoundError):
         load_index_config()
 
@@ -178,9 +158,7 @@ def test_raises_on_quoted_recursive_string(tmp_path: Path, monkeypatch: pytest.M
         tmp_path,
         "index_paths:\n  - path: /docs\n    recursive: 'false'\n",
     )
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     with pytest.raises(ValueError, match="quoted string"):
         load_index_config()
 
@@ -190,9 +168,7 @@ def test_bare_string_exclude_dirs_is_normalized(tmp_path: Path, monkeypatch: pyt
         tmp_path,
         "index_paths:\n  - path: /docs\n    exclude_dirs: .git\n",
     )
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert cfg.index_paths[0].exclude_dirs == frozenset({".git"})
@@ -200,9 +176,7 @@ def test_bare_string_exclude_dirs_is_normalized(tmp_path: Path, monkeypatch: pyt
 
 def test_path_stored_as_resolved_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = _write_config(tmp_path, f"index_paths:\n  - path: {tmp_path}\n")
-    monkeypatch.setattr(
-        "local_graph_rag.ingest.doc_config.INDEX_CONFIG_PATH", str(cfg_path)
-    )
+    patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
     assert cfg.index_paths[0].path.is_absolute()

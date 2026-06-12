@@ -6,6 +6,7 @@ import pytest
 
 from local_graph_rag.rag.local_retrieval import LocalContext
 from local_graph_rag.rag.query_graph_rag import _build_prompt, _format_local, _validate_mode
+from tests.helpers import patch_global_embed, patch_local_embed
 
 
 @pytest.fixture
@@ -113,7 +114,7 @@ def test_validate_mode_rejects_unknown_value(capsys):
 
 
 def test_build_prompt_local_mode_skips_get_communities(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
 
     calls = []
     original = store.get_communities
@@ -128,8 +129,8 @@ def test_build_prompt_global_mode_falls_back_to_local_when_context_empty(store, 
     # No communities seeded — global_retrieve returns an empty GlobalContext, and
     # _build_prompt should fall through to a local-mode prompt rather than handing
     # the LLM an empty "community summaries" block.
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
-    monkeypatch.setattr("local_graph_rag.rag.global_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
+    patch_global_embed(monkeypatch, [0.0] * 768)
 
     prompt = _build_prompt("anything", "global", store, _empty_qdrant())
 

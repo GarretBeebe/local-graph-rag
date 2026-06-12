@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv==0.11.14
 
 # Create unprivileged user before COPY so --chown flags work without a separate layer.
 RUN addgroup --system appgroup && \

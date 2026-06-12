@@ -6,6 +6,7 @@ import pytest
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.global_retrieval import GlobalContext, global_retrieve
 from local_graph_rag.rag.local_retrieval import LocalContext, _extract_identifiers, local_retrieve
+from tests.helpers import patch_global_embed, patch_local_embed
 
 
 @pytest.fixture
@@ -69,21 +70,21 @@ class _FakeQdrant:
 
 
 def test_local_retrieve_chunk_texts_from_payload(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     client = _FakeQdrant([_FakePoint("c1", "hello world")])
     ctx = local_retrieve("q", store, client)
     assert ctx.chunk_texts == ["hello world"]
 
 
 def test_local_retrieve_no_payload_text_excluded(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     client = _FakeQdrant([_FakePoint("c1")])  # no text in payload
     ctx = local_retrieve("q", store, client)
     assert ctx.chunk_texts == []
 
 
 def test_local_retrieve_deduplicates_entities(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
 
     # Two chunks both linked to the same entity
     slug = store.upsert_entity("Alpha", type="TYPE", description="desc")
@@ -98,7 +99,7 @@ def test_local_retrieve_deduplicates_entities(store, monkeypatch):
 
 
 def test_local_retrieve_empty_when_no_chunk_links(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     # Qdrant returns a chunk that is not linked to any entity in the store
     client = _FakeQdrant([_FakePoint("c-unknown", "some text")])
     ctx = local_retrieve("q", store, client)
@@ -108,7 +109,7 @@ def test_local_retrieve_empty_when_no_chunk_links(store, monkeypatch):
 
 
 def test_local_retrieve_returns_empty_on_no_results(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     client = _FakeQdrant([])
     ctx = local_retrieve("q", store, client)
     assert ctx == LocalContext()
@@ -143,7 +144,7 @@ def test_extract_identifiers_excludes_plain_english_words():
 
 
 def test_local_retrieve_injects_def_name_exact_match(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     vector_hit = _FakePoint("c1", "from foo import bar")
     def_hit = _FakePoint(
         "c2", "def _parse_extraction_response():\n    ...", def_name="_parse_extraction_response"
@@ -157,7 +158,7 @@ def test_local_retrieve_injects_def_name_exact_match(store, monkeypatch):
 
 
 def test_local_retrieve_def_name_match_deduped_with_vector_results(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     same_text = "def local_retrieve():\n    ..."
     client = _FakeQdrant(
         [_FakePoint("c1", same_text)],
@@ -170,7 +171,7 @@ def test_local_retrieve_def_name_match_deduped_with_vector_results(store, monkey
 
 
 def test_local_retrieve_no_identifiers_skips_def_name_lookup(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     client = _FakeQdrant([_FakePoint("c1", "hello world")])
 
     def _fail_scroll(*args, **kwargs):
@@ -183,7 +184,7 @@ def test_local_retrieve_no_identifiers_skips_def_name_lookup(store, monkeypatch)
 
 
 def test_local_retrieve_multi_piece_def_ordered_by_chunk_index(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     piece_1 = _FakePoint("c2", "piece one", def_name="big_function", chunk_index=1)
     piece_0 = _FakePoint("c1", "piece zero", def_name="big_function", chunk_index=0)
     # Returned out of order — scroll doesn't guarantee ordering.
@@ -195,7 +196,7 @@ def test_local_retrieve_multi_piece_def_ordered_by_chunk_index(store, monkeypatc
 
 
 def test_local_retrieve_repeated_identifier_frees_dedup_slot(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     hit_a = _FakePoint("ca", "alpha body", def_name="alpha_func", chunk_index=0)
     hit_b = _FakePoint("cb", "beta body", def_name="beta_func", chunk_index=0)
     client = _FakeQdrant([], scroll_points=[hit_a, hit_b])
@@ -208,7 +209,7 @@ def test_local_retrieve_repeated_identifier_frees_dedup_slot(store, monkeypatch)
 
 
 def test_local_retrieve_single_scroll_call_for_multiple_identifiers(store, monkeypatch):
-    monkeypatch.setattr("local_graph_rag.rag.local_retrieval.embed", lambda *a, **kw: [0.0] * 768)
+    patch_local_embed(monkeypatch)
     client = _FakeQdrant(
         [],
         scroll_points=[
@@ -235,10 +236,7 @@ def _seed_community(store: GraphStore, community_id: int, vec: list[float], summ
 
 
 def test_global_retrieve_empty_communities(store, monkeypatch):
-    monkeypatch.setattr(
-        "local_graph_rag.rag.global_retrieval.embed",
-        lambda *a, **kw: [0.0] * 3,
-    )
+    patch_global_embed(monkeypatch, [0.0] * 3)
     ctx = global_retrieve("q", store)
     assert ctx == GlobalContext()
 
@@ -250,10 +248,7 @@ def test_global_retrieve_top_n_by_cosine(store, monkeypatch):
     _seed_community(store, 2, [0.0, 0.0, 1.0], "community two")
 
     # Question embedding aligned with community 0
-    monkeypatch.setattr(
-        "local_graph_rag.rag.global_retrieval.embed",
-        lambda *a, **kw: [1.0, 0.0, 0.0],
-    )
+    patch_global_embed(monkeypatch, [1.0, 0.0, 0.0])
 
     ctx = global_retrieve("q", store, n=2)
     assert len(ctx.community_summaries) == 2
@@ -262,10 +257,7 @@ def test_global_retrieve_top_n_by_cosine(store, monkeypatch):
 
 def test_global_retrieve_uses_pre_fetched_communities(store, monkeypatch):
     _seed_community(store, 0, [1.0, 0.0, 0.0], "only community")
-    monkeypatch.setattr(
-        "local_graph_rag.rag.global_retrieval.embed",
-        lambda *a, **kw: [1.0, 0.0, 0.0],
-    )
+    patch_global_embed(monkeypatch, [1.0, 0.0, 0.0])
 
     communities = store.get_communities()
     # Passing pre-fetched communities — store.get_communities() must not be called again
@@ -283,9 +275,6 @@ def test_global_retrieve_n_caps_results(store, monkeypatch):
         vec[i] = 1.0
         _seed_community(store, i, vec, f"summary {i}")
 
-    monkeypatch.setattr(
-        "local_graph_rag.rag.global_retrieval.embed",
-        lambda *a, **kw: [1.0, 0.0, 0.0, 0.0, 0.0],
-    )
+    patch_global_embed(monkeypatch, [1.0, 0.0, 0.0, 0.0, 0.0])
     ctx = global_retrieve("q", store, n=3)
     assert len(ctx.community_summaries) == 3

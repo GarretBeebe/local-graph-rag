@@ -85,7 +85,7 @@ def _require_positive(name: str, value: int | float) -> None:
         raise ValueError(f"settings: {name} must be > 0, got {value}")
 
 
-def _validate_settings() -> None:
+def _validate_core_positive_settings() -> None:
     for name, value in {
         "QDRANT_PORT": QDRANT_PORT,
         "VECTOR_SIZE": VECTOR_SIZE,
@@ -109,6 +109,9 @@ def _validate_settings() -> None:
         raise ValueError(f"settings: OLLAMA_MAX_RETRIES must be >= 0, got {OLLAMA_MAX_RETRIES}")
     if CHUNK_OVERLAP < 0:
         raise ValueError(f"settings: CHUNK_OVERLAP must be >= 0, got {CHUNK_OVERLAP}")
+
+
+def _validate_chat_settings() -> None:
     for name, value in {
         "MAX_CHAT_MESSAGES": MAX_CHAT_MESSAGES,
         "MAX_CHAT_CONTENT_ITEMS": MAX_CHAT_CONTENT_ITEMS,
@@ -130,6 +133,9 @@ def _validate_settings() -> None:
             f"settings: MAX_CHAT_TOTAL_CHARS must be >= MAX_CHAT_MESSAGE_CHARS, "
             f"got {MAX_CHAT_TOTAL_CHARS} < {MAX_CHAT_MESSAGE_CHARS}"
         )
+
+
+def _validate_chunk_settings() -> None:
     if CHUNK_OVERLAP >= CHUNK_SIZE:
         raise ValueError(
             f"settings: CHUNK_OVERLAP must be smaller than CHUNK_SIZE, "
@@ -140,6 +146,9 @@ def _validate_settings() -> None:
             f"settings: MAX_CHUNK_CHARS must be >= CHUNK_SIZE, "
             f"got {MAX_CHUNK_CHARS} < {CHUNK_SIZE}"
         )
+
+
+def _validate_auth_settings() -> None:
     if API_KEY and len(API_KEY) < 32:
         raise ValueError("settings: API_KEY must be at least 32 characters when set")
     if ALLOW_INSECURE_LOCALONLY and "*" in CORS_ORIGINS:
@@ -148,6 +157,13 @@ def _validate_settings() -> None:
             "with auth disabled, this lets any website read the full RAG corpus via the "
             "victim's browser."
         )
+
+
+def _validate_settings() -> None:
+    _validate_core_positive_settings()
+    _validate_chat_settings()
+    _validate_chunk_settings()
+    _validate_auth_settings()
 
 
 _validate_settings()

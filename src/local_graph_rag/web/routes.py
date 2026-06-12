@@ -18,7 +18,6 @@ from local_graph_rag.settings import (
 )
 from local_graph_rag.web import user_store
 from local_graph_rag.web.auth import create_session, is_valid_token, revoke_session
-from local_graph_rag.web.middleware import _AUTH_COOKIE, _extract_bearer_token, _is_secure_request
 from local_graph_rag.web.openai_compat import build_chat_response, model_entry
 from local_graph_rag.web.rag_executor import (
     get_rag_executor,
@@ -30,6 +29,12 @@ from local_graph_rag.web.schemas import (
     LoginRequest,
     extract_question_from_messages,
     validate_chat_request,
+)
+from local_graph_rag.web.security import (
+    AUTH_COOKIE,
+    extract_bearer_token,
+    is_secure_request,
+    password_fits_bcrypt,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +94,8 @@ def root() -> RedirectResponse:
 async def login(
     request: Request, response: Response, credentials: LoginRequest
 ) -> dict[str, bool]:
+    if not password_fits_bcrypt(credentials.password):
+        raise HTTPException(status_code=400, detail="Password exceeds bcrypt size limit")
     stored = user_store.get_hash(credentials.username)
     hash_to_check = stored.encode() if stored else _DUMMY_HASH
     password_matches = await asyncio.to_thread(
@@ -98,10 +105,10 @@ async def login(
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_session(credentials.username)
     response.set_cookie(
-        _AUTH_COOKIE,
+        AUTH_COOKIE,
         token,
         httponly=True,
-        secure=_is_secure_request(request),
+        secure=is_secure_request(request),
         samesite="lax",
         max_age=SESSION_EXPIRY_HOURS * 3600,
         path="/",
@@ -111,14 +118,14 @@ async def login(
 
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response) -> dict[str, bool]:
-    token = _extract_bearer_token(request)
+    token = extract_bearer_token(request)
     if token:
         revoke_session(token)
-    response.delete_cookie(_AUTH_COOKIE, path="/")
+    response.delete_cookie(AUTH_COOKIE, path="/")
     return {"ok": True}
 
 
 @router.get("/auth/status")
 def auth_status(request: Request) -> Response:
-    authenticated = ALLOW_INSECURE_LOCALONLY or is_valid_token(_extract_bearer_token(request))
+    authenticated = ALLOW_INSECURE_LOCALONLY or is_valid_token(extract_bearer_token(request))
     return JSONResponse(content={"authenticated": authenticated})

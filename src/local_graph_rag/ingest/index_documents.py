@@ -17,6 +17,7 @@ from qdrant_client.models import (
 )
 from tqdm import tqdm
 
+from local_graph_rag.common.logging import configure_cli_logging
 from local_graph_rag.common.paths import (
     has_allowed_extension,
     is_under_any_root,
@@ -79,7 +80,7 @@ def _is_within_size_limit(path: Path) -> bool:
     try:
         size = path.stat().st_size
     except OSError as e:
-        logger.warning("Skipping unreadable file %s: %s", path, e)
+        _warn_unreadable_file(path, e)
         return False
     if size > MAX_INDEX_FILE_BYTES:
         logger.warning(
@@ -103,7 +104,7 @@ def _hash_file(path: Path) -> str | None:
     try:
         return _compute_hash(path)
     except Exception as e:
-        logger.warning("Skipping unreadable file %s: %s", path, e)
+        _warn_unreadable_file(path, e)
         return None
 
 
@@ -112,8 +113,12 @@ def _read_file(path: Path) -> str | None:
     try:
         return path.read_bytes().decode(errors="ignore")
     except Exception as e:
-        logger.warning("Skipping unreadable file %s: %s", path, e)
+        _warn_unreadable_file(path, e)
         return None
+
+
+def _warn_unreadable_file(path: Path, error: BaseException) -> None:
+    logger.warning("Skipping unreadable file %s: %s", path, error)
 
 
 def _delete_file(store: GraphStore, client: QdrantClient, filepath: str) -> None:
@@ -127,6 +132,37 @@ def _delete_file(store: GraphStore, client: QdrantClient, filepath: str) -> None
     if prior_ids:
         client.delete(collection_name=COLLECTION, points_selector=PointIdsList(points=prior_ids))
     store.delete_file_data(filepath)
+
+
+def _vector_config_value(config: object, name: str) -> object:
+    if isinstance(config, dict):
+        return config.get(name)
+    return getattr(config, name, None)
+
+
+def _normalize_distance(value: object) -> str:
+    text = str(value or "")
+    return text.rsplit(".", 1)[-1].lower()
+
+
+def _validate_collection_config(client: QdrantClient) -> None:
+    """Fail fast if an existing collection cannot accept this app's embeddings."""
+    info = client.get_collection(collection_name=COLLECTION)
+    params = getattr(getattr(info, "config", None), "params", None)
+    vectors = getattr(params, "vectors", None)
+    if isinstance(vectors, dict) and "" in vectors:
+        vectors = vectors[""]
+
+    actual_size = _vector_config_value(vectors, "size")
+    actual_distance = _normalize_distance(_vector_config_value(vectors, "distance"))
+    expected_distance = _normalize_distance(Distance.COSINE)
+    if actual_size != VECTOR_SIZE or actual_distance != expected_distance:
+        raise RuntimeError(
+            f"Qdrant collection {COLLECTION!r} has vector config "
+            f"size={actual_size}, distance={actual_distance!r}; expected "
+            f"size={VECTOR_SIZE}, distance={expected_distance!r}. Recreate the collection "
+            "or set VECTOR_SIZE/embedding model to match existing data."
+        )
 
 
 def ensure_collection(client: QdrantClient) -> None:
@@ -146,6 +182,8 @@ def ensure_collection(client: QdrantClient) -> None:
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
+    else:
+        _validate_collection_config(client)
     client.create_payload_index(
         collection_name=COLLECTION,
         field_name="def_name",
@@ -218,6 +256,50 @@ def _write_index_data(
     return len(entity_ids)
 
 
+def _cleanup_changed_file(
+    path: Path,
+    filepath: str,
+    stored_hash: str | None,
+    store: GraphStore,
+    client: QdrantClient,
+) -> bool:
+    try:
+        _delete_file(store, client, filepath)
+        if stored_hash is not None:
+            store.clear_extraction_cache(filepath)
+    except Exception as e:
+        logger.error("Cleanup before indexing failed for %s: %s", path, e)
+        return False
+    return True
+
+
+def _chunk_file(path: Path, text: str) -> list[tuple[str, str | None]]:
+    return [(c.strip(), name) for c, name in chunk_document(path, text) if c.strip()]
+
+
+def _embed_file_chunks(path: Path, chunks: list[str]) -> list[list[float]] | None:
+    try:
+        return embed_batch(chunks)
+    except Exception as e:
+        logger.error("Embedding failed for %s: %s", path, e)
+        return None
+
+
+def _build_points(
+    filepath: str,
+    chunked: list[tuple[str, str | None]],
+    vectors: list[list[float]],
+) -> list[PointStruct]:
+    return [
+        PointStruct(
+            id=str(uuid.uuid4()),
+            vector=vec,
+            payload={"text": chunk, "filepath": filepath, "chunk_index": i, "def_name": def_name},
+        )
+        for i, ((chunk, def_name), vec) in enumerate(zip(chunked, vectors, strict=True))
+    ]
+
+
 def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     """Process one file through the full pipeline. Returns 'indexed' | 'skipped' | 'failed'."""
     filepath = normalize_path(path)
@@ -229,38 +311,24 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     if current_hash == stored_hash:
         return "skipped"
 
-    try:
-        _delete_file(store, client, filepath)
-        if stored_hash is not None:
-            store.clear_extraction_cache(filepath)
-    except Exception as e:
-        logger.error("Cleanup before indexing failed for %s: %s", path, e)
+    if not _cleanup_changed_file(path, filepath, stored_hash, store, client):
         return "failed"
 
     text = _read_file(path)
     if text is None:
         return "failed"
 
-    chunked = [(c.strip(), name) for c, name in chunk_document(path, text) if c.strip()]
+    chunked = _chunk_file(path, text)
     if not chunked:
         logger.info("No chunks produced for %s — skipping", path)
         return "skipped"
     chunks = [c for c, _ in chunked]
 
-    try:
-        vectors = embed_batch(chunks)
-    except Exception as e:
-        logger.error("Embedding failed for %s: %s", path, e)
+    vectors = _embed_file_chunks(path, chunks)
+    if vectors is None:
         return "failed"
 
-    points = [
-        PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vec,
-            payload={"text": chunk, "filepath": filepath, "chunk_index": i, "def_name": def_name},
-        )
-        for i, ((chunk, def_name), vec) in enumerate(zip(chunked, vectors, strict=True))
-    ]
+    points = _build_points(filepath, chunked, vectors)
 
     try:
         n_entities = _write_index_data(filepath, chunks, points, store, client, current_hash)
@@ -319,7 +387,7 @@ def _collect_files() -> list[Path]:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
+    configure_cli_logging()
 
     store = GraphStore()
     client = get_qdrant_client()

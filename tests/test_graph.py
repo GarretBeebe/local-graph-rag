@@ -10,6 +10,7 @@ from local_graph_rag.graph.extractor import (
     extract_entities_for_file,
 )
 from local_graph_rag.graph.store import GraphStore, slugify
+from tests.helpers import EMPTY_EXTRACTION_JSON, patch_ollama_generate
 
 # ---------------------------------------------------------------------------
 # slugify
@@ -199,7 +200,7 @@ def test_delete_file_data_returns_prior_chunk_ids(store: GraphStore):
 
 
 def test_extraction_cache_round_trip(store: GraphStore):
-    store.cache_extraction("foo.py", 0, '{"entities": [], "relationships": []}')
+    store.cache_extraction("foo.py", 0, EMPTY_EXTRACTION_JSON)
     store.cache_extraction("foo.py", 1, '{"entities": [{"name": "A"}], "relationships": []}')
     cached = store.get_cached_extractions("foo.py")
     assert 0 in cached
@@ -222,9 +223,9 @@ def test_extract_entities_for_file_requests_json_format(store: GraphStore, monke
 
     def _fake_generate(*args, **kwargs):
         captured.update(kwargs)
-        return '{"entities": [], "relationships": []}'
+        return EMPTY_EXTRACTION_JSON
 
-    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+    patch_ollama_generate(monkeypatch, _fake_generate)
 
     result = extract_entities_for_file(["some chunk text"], "foo.py", store)
 
@@ -254,7 +255,7 @@ def test_extract_entities_for_file_isolates_batch_failure(store: GraphStore, mon
             )
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+    patch_ollama_generate(monkeypatch, _fake_generate)
 
     result = extract_entities_for_file(
         ["alpha entity chunk", "beta entity chunk"], "foo.py", store
@@ -352,7 +353,7 @@ def test_parse_malformed_returns_empty():
 
 
 def test_parse_empty_arrays():
-    result = _parse_extraction_response('{"entities": [], "relationships": []}')
+    result = _parse_extraction_response(EMPTY_EXTRACTION_JSON)
     assert result.entities == []
     assert result.relationships == []
 

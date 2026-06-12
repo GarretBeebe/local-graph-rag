@@ -28,7 +28,10 @@ def test_32_character_api_key_is_accepted(monkeypatch: pytest.MonkeyPatch):
 def test_insecure_localonly_with_wildcard_cors_is_rejected(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ALLOW_INSECURE_LOCALONLY", "true")
     monkeypatch.setenv("CORS_ORIGINS", "*")
-    with pytest.raises(ValueError, match=r"CORS_ORIGINS=\* is not allowed with ALLOW_INSECURE_LOCALONLY"):
+    with pytest.raises(
+        ValueError,
+        match=r"CORS_ORIGINS=\* is not allowed with ALLOW_INSECURE_LOCALONLY",
+    ):
         importlib.reload(settings)
 
 

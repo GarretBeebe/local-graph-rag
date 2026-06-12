@@ -8,6 +8,7 @@ from local_graph_rag.graph.summarizer import (
     _compute_member_hash,
     summarize_community,
 )
+from tests.helpers import patch_ollama_generate
 
 
 @pytest.fixture
@@ -79,7 +80,7 @@ def test_summarize_community_skips_unchanged(store, monkeypatch):
         generate_calls.append(a)
         return "x"
 
-    monkeypatch.setattr("local_graph_rag.rag.ollama_client.generate", _fake_generate)
+    patch_ollama_generate(monkeypatch, _fake_generate)
     monkeypatch.setattr("local_graph_rag.graph.summarizer.embed", lambda *a, **kw: [0.0] * 768)
 
     assert summarize_community(0, store) is False
@@ -90,10 +91,7 @@ def test_summarize_community_regenerates_on_membership_change(store, monkeypatch
     slug = _add_entity_in_community(store, "Beta", 0)
     store.upsert_community(0, "old summary", [slug], "stale_hash" * 4, _ZERO_EMBEDDING)
 
-    monkeypatch.setattr(
-        "local_graph_rag.rag.ollama_client.generate",
-        lambda *a, **kw: "new summary",
-    )
+    patch_ollama_generate(monkeypatch, lambda *a, **kw: "new summary")
     monkeypatch.setattr("local_graph_rag.graph.summarizer.embed", lambda *a, **kw: [0.1] * 768)
 
     assert summarize_community(0, store) is True

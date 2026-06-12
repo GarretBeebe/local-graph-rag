@@ -13,6 +13,7 @@ import sys
 
 import bcrypt
 
+from local_graph_rag.web.security import BCRYPT_MAX_PASSWORD_BYTES, password_fits_bcrypt
 from local_graph_rag.web.user_store import delete_user, init_db, list_users, upsert_user
 
 
@@ -43,6 +44,12 @@ def main() -> None:
             password = getpass.getpass("Password: ")
         if not password:
             print("Error: password cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+        if not password_fits_bcrypt(password):
+            print(
+                f"Error: password cannot exceed {BCRYPT_MAX_PASSWORD_BYTES} bytes.",
+                file=sys.stderr,
+            )
             sys.exit(1)
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         upsert_user(args.username, pw_hash)

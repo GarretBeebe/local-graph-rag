@@ -9,6 +9,7 @@ from typing import Literal
 from qdrant_client import QdrantClient
 
 import local_graph_rag.rag.ollama_client as ollama_client
+from local_graph_rag.common.logging import configure_cli_logging
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.global_retrieval import GlobalContext, global_retrieve
 from local_graph_rag.rag.local_retrieval import LocalContext, local_retrieve
@@ -133,7 +134,7 @@ def _validate_mode(value: str) -> GraphMode:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
+    configure_cli_logging()
 
     if len(sys.argv) < 2:
         print(
