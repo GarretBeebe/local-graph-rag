@@ -142,6 +142,12 @@ def _validate_settings() -> None:
         )
     if API_KEY and len(API_KEY) < 32:
         raise ValueError("settings: API_KEY must be at least 32 characters when set")
+    if ALLOW_INSECURE_LOCALONLY and "*" in CORS_ORIGINS:
+        raise ValueError(
+            "settings: CORS_ORIGINS=* is not allowed with ALLOW_INSECURE_LOCALONLY=true — "
+            "with auth disabled, this lets any website read the full RAG corpus via the "
+            "victim's browser."
+        )
 
 
 _validate_settings()

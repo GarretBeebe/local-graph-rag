@@ -170,6 +170,10 @@ If connecting from a browser or webview-based client (e.g. Chatbox mobile), also
 `curl` against the same endpoint returns `200 OK` — the request succeeds server-side but the
 response is missing the CORS header the client requires.
 
+`CORS_ORIGINS=*` cannot be combined with `ALLOW_INSECURE_LOCALONLY=true` (the server refuses to
+start) — with auth disabled, a wildcard origin would let any website read your indexed corpus
+via the victim's browser.
+
 Authorization is intentionally coarse-grained for this local implementation: any authenticated
 user can query the full indexed corpus. Do not use this as a multi-tenant RBAC system.
 
