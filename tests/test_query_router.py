@@ -56,6 +56,9 @@ def test_route_falls_back_to_heuristic_on_unexpected_response(monkeypatch):
     ("what does GraphStore do?", "local"),
     ("how does chunking work?", "local"),
     ("what is the relationship between extractor and store?", "local"),
+    ("summarize vectorless-rag.md", "local"),
+    ("what's in settings.py?", "local"),
+    ("give me an overview of config.yaml", "local"),
 ])
 def test_heuristic_classifies_correctly(question: str, expected: str):
     assert _heuristic(question) == expected
