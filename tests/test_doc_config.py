@@ -112,7 +112,7 @@ def test_real_config_excludes_claude_globally(monkeypatch: pytest.MonkeyPatch):
     A prior config edit accidentally scoped .claude exclusion to only the Code
     path's exclude_dirs, leaving it unexcluded under the other 7 index paths.
     """
-    real_config = Path(__file__).parent.parent / "config" / "index_config.yaml"
+    real_config = Path(__file__).parent.parent / "config" / "index_config.yaml.example"
     patch_index_config_path(monkeypatch, real_config)
     cfg = load_index_config()
     assert cfg is not None

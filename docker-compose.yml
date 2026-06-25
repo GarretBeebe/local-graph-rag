@@ -5,7 +5,8 @@
 # and make sure it is running before starting this stack.
 #
 # Quick start:
-#   cp .env.example .env   # fill in QDRANT_API_KEY, NEXTCLOUD_PATH, CODE_PATH
+#   cp .env.example .env                                     # fill in QDRANT_API_KEY, NEXTCLOUD_PATH, CODE_PATH
+#   cp config/index_config.yaml.example config/index_config.yaml  # customize index paths
 #   docker compose up -d qdrant
 #   docker compose --profile indexer run --rm indexer   # index documents
 #   docker compose up -d api                            # start API (Phase 6+)

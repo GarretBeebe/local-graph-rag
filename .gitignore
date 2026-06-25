@@ -13,6 +13,9 @@ build/
 .env.*
 !.env.example
 
+# User-specific index config (copy from config/index_config.yaml.example)
+config/index_config.yaml
+
 # Data — SQLite databases and Qdrant snapshots
 data/
 *.sqlite3

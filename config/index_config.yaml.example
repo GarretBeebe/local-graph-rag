@@ -1,29 +1,21 @@
 # Document index configuration for local-graph-rag.
+# Copy this file to config/index_config.yaml and customize it for your setup.
+#
 # Paths are container paths — host directories are mounted via docker-compose.
-# See .env.example for the corresponding host-path variables.
+# See .env.example for the corresponding host-path variables (NEXTCLOUD_PATH, CODE_PATH).
+#
+# /app/documents/Nextcloud  ← mounted from NEXTCLOUD_PATH in your .env
+# /app/documents/Code       ← mounted from CODE_PATH in your .env
 
 index_paths:
 
-  - path: /app/documents/Nextcloud/AI-ML
+  # Add one entry per subdirectory you want to index under your Nextcloud mount.
+  # Remove or replace these examples with your actual folder names.
+  - path: /app/documents/Nextcloud/YourFolder
     recursive: true
 
-  - path: /app/documents/Nextcloud/My Computer Setup
-    recursive: true
-
-  - path: /app/documents/Nextcloud/OpenAI Projects Context
-    recursive: true
-
-  - path: /app/documents/Nextcloud/Resumes
-    recursive: true
-
-  - path: /app/documents/Nextcloud/Scripts
-    recursive: true
-
-  - path: /app/documents/Nextcloud/Software Engineering
-    recursive: true
-
-  - path: /app/documents/Nextcloud/Splunk
-    recursive: true
+  # - path: /app/documents/Nextcloud/AnotherFolder
+  #   recursive: true
 
   - path: /app/documents/Code
     recursive: true

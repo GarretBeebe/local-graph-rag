@@ -106,7 +106,8 @@ All three are overridable via environment variables.
 ## Quick start
 
 ```bash
-cp .env.example .env          # set QDRANT_API_KEY, NEXTCLOUD_PATH, CODE_PATH, and optional API_KEY
+cp .env.example .env                                           # set QDRANT_API_KEY, NEXTCLOUD_PATH, CODE_PATH, and optional API_KEY
+cp config/index_config.yaml.example config/index_config.yaml  # customize which subdirectories to index
 
 docker compose up -d qdrant
 
