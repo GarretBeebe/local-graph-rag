@@ -144,20 +144,31 @@ const $ = id => document.getElementById(id);
       }
     }
 
-    async function _renderStream(reader, thinking) {
+    // Renders the streamed answer into view.div. Re-parsing the whole answer on every token
+    // is quadratic, so re-render at most once per animation frame; the finally block flushes
+    // the last text even when the stream ends or is aborted mid-frame.
+    async function _renderStream(reader, thinking, view) {
       let accumulated = '';
-      let assistantDiv = null;
-      for await (const delta of _iterSSEDeltas(reader)) {
-        accumulated += delta;
-        if (!assistantDiv) {
-          thinking.remove();
-          assistantDiv = appendMessage('assistant', marked.parse(accumulated));
-        } else {
-          assistantDiv.innerHTML = DOMPurify.sanitize(marked.parse(accumulated));
-          messagesEl.scrollTop = messagesEl.scrollHeight;
+      let frame = 0;
+      const render = () => {
+        frame = 0;
+        view.div.innerHTML = DOMPurify.sanitize(marked.parse(accumulated));
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      };
+      try {
+        for await (const delta of _iterSSEDeltas(reader)) {
+          accumulated += delta;
+          if (!view.div) {
+            thinking.remove();
+            view.div = appendMessage('assistant', marked.parse(accumulated));
+          } else if (!frame) {
+            frame = requestAnimationFrame(render);
+          }
         }
+      } finally {
+        if (frame) cancelAnimationFrame(frame);
+        if (view.div) render();
       }
-      return assistantDiv;
     }
 
     async function sendMessage() {
@@ -168,7 +179,7 @@ const $ = id => document.getElementById(id);
       _abortCtl = new AbortController();
       _lockUi();
       let wasStopped = false;
-      let assistantDiv = null;
+      const view = { div: null };  // set by _renderStream, so an abort can still mark it
 
       appendMessage('user', text);
       const thinking = document.createElement('div');
@@ -197,16 +208,16 @@ const $ = id => document.getElementById(id);
           return;
         }
 
-        assistantDiv = await _renderStream(res.body.getReader(), thinking);
-        if (!assistantDiv) appendMessage('error', 'No response received.');
+        await _renderStream(res.body.getReader(), thinking, view);
+        if (!view.div) appendMessage('error', 'No response received.');
       } catch (err) {
         if (err.name === 'AbortError') {
           wasStopped = true;
-          if (assistantDiv) {
+          if (view.div) {
             const suffix = document.createElement('span');
             suffix.className = 'stopped-suffix';
             suffix.textContent = '[stopped]';
-            assistantDiv.appendChild(suffix);
+            view.div.appendChild(suffix);
           } else {
             appendMessage('error', '[stopped]');
           }

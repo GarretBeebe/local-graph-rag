@@ -5,6 +5,7 @@ Stores bcrypt password hashes and opaque session tokens in data/users.sqlite3,
 which is persisted via the graph-data Docker volume.
 """
 
+import hashlib
 import secrets
 import time
 
@@ -13,7 +14,11 @@ from local_graph_rag.settings import DATA_DIR
 
 DB_PATH = DATA_DIR / "users.sqlite3"
 _store = SqliteStore(DB_PATH)
-_SECONDS_PER_HOUR = 3600
+
+
+def _token_hash(token: str) -> str:
+    """Sessions are stored by hash, so a leaked database can't be replayed as live tokens."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def init_db() -> None:
@@ -28,7 +33,7 @@ def init_db() -> None:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
+                token TEXT PRIMARY KEY,  -- sha256 of the session token; raw tokens never stored
                 username TEXT NOT NULL,
                 expires_at REAL NOT NULL
             )
@@ -73,14 +78,15 @@ def list_users() -> list[str]:
     return [row[0] for row in rows]
 
 
-def create_session(username: str, expiry_hours: int) -> str:
+def create_session(username: str, expiry_seconds: int) -> str:
+    """Create a session and return its token; only the token's hash is stored."""
     token = secrets.token_hex(32)
-    expires_at = time.time() + expiry_hours * _SECONDS_PER_HOUR
+    expires_at = time.time() + expiry_seconds
     conn = _store.conn
     with conn:
         conn.execute(
             "INSERT INTO sessions(token, username, expires_at) VALUES(?, ?, ?)",
-            (token, username, expires_at),
+            (_token_hash(token), username, expires_at),
         )
     return token
 
@@ -95,7 +101,7 @@ def validate_session(token: str) -> str | None:
             INNER JOIN users ON users.username = sessions.username
             WHERE sessions.token=? AND sessions.expires_at > ?
             """,
-            (token, time.time()),
+            (_token_hash(token), time.time()),
         ).fetchone()
     return row[0] if row else None
 
@@ -103,7 +109,7 @@ def validate_session(token: str) -> str | None:
 def delete_session(token: str) -> None:
     conn = _store.conn
     with conn:
-        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+        conn.execute("DELETE FROM sessions WHERE token=?", (_token_hash(token),))
 
 
 def purge_expired_sessions() -> None:

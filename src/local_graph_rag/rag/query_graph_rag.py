@@ -4,7 +4,7 @@ import logging
 import sys
 import threading
 from collections.abc import Iterator
-from typing import Literal
+from typing import Literal, get_args
 
 from qdrant_client import QdrantClient
 
@@ -76,18 +76,13 @@ def _build_prompt(
     client: QdrantClient,
     cancel: threading.Event | None = None,
 ) -> str:
-    communities: list[dict] = store.get_communities() if graph_mode != "local" else []
-    communities_available = any(
-        c["embedding"] is not None and c["summary"] for c in communities
-    )
-
     use_global = graph_mode == "global" or (
         graph_mode == "auto"
-        and route_query(question, communities_available, cancel=cancel) == "global"
+        and route_query(question, store.has_community_summaries(), cancel=cancel) == "global"
     )
 
     if use_global:
-        ctx = global_retrieve(question, store, communities=communities)
+        ctx = global_retrieve(question, store)
         if not ctx.community_summaries:
             logger.warning("Global context empty — falling back to local retrieval")
             return _format_local(local_retrieve(question, store, client), question)
@@ -122,7 +117,7 @@ def ask_stream_sync(
     yield from ollama_client.stream_generate(prompt, model, cancel=cancel)
 
 
-_VALID_MODES = ("auto", "local", "global")
+_VALID_MODES = get_args(GraphMode)
 
 
 def _validate_mode(value: str) -> GraphMode:

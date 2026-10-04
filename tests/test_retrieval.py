@@ -271,18 +271,12 @@ def test_global_retrieve_top_n_by_cosine(store, monkeypatch):
     assert ctx.community_ids[0] == 0  # community 0 is best match
 
 
-def test_global_retrieve_uses_pre_fetched_communities(store, monkeypatch):
-    _seed_community(store, 0, [1.0, 0.0, 0.0], "only community")
-    patch_global_embed(monkeypatch, [1.0, 0.0, 0.0])
-
-    communities = store.get_communities()
-    # Passing pre-fetched communities — store.get_communities() must not be called again
-    original_get = store.get_communities
-    calls = []
-    store.get_communities = lambda: calls.append(1) or original_get()  # type: ignore[method-assign]
-
-    global_retrieve("q", store, communities=communities)
-    assert calls == []  # no additional DB call
+def test_has_community_summaries_requires_a_summary_and_an_embedding(store):
+    assert store.has_community_summaries() is False
+    store.upsert_community(0, "", ["e0"], "h0", b"\x00" * 12)  # no summary text
+    assert store.has_community_summaries() is False
+    _seed_community(store, 1, [1.0, 0.0, 0.0], "a real summary")
+    assert store.has_community_summaries() is True
 
 
 def test_global_retrieve_n_caps_results(store, monkeypatch):

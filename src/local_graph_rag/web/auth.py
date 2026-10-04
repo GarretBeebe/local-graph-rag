@@ -2,12 +2,12 @@
 
 import hmac
 
-from local_graph_rag.settings import API_KEY, SESSION_EXPIRY_HOURS
+from local_graph_rag.settings import API_KEY, SESSION_EXPIRY_SECONDS
 from local_graph_rag.web import user_store
 
 
 def create_session(username: str) -> str:
-    return user_store.create_session(username, SESSION_EXPIRY_HOURS)
+    return user_store.create_session(username, SESSION_EXPIRY_SECONDS)
 
 
 def revoke_session(token: str) -> None:

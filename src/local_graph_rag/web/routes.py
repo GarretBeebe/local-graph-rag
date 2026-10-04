@@ -14,7 +14,7 @@ from local_graph_rag.settings import (
     ALLOW_INSECURE_LOCALONLY,
     GEN_MODEL,
     OLLAMA_MODEL_LIST_TIMEOUT_SECONDS,
-    SESSION_EXPIRY_HOURS,
+    SESSION_EXPIRY_SECONDS,
 )
 from local_graph_rag.web import user_store
 from local_graph_rag.web.auth import create_session, is_valid_token, revoke_session
@@ -110,7 +110,7 @@ async def login(
         httponly=True,
         secure=is_secure_request(request),
         samesite="lax",
-        max_age=SESSION_EXPIRY_HOURS * 3600,
+        max_age=SESSION_EXPIRY_SECONDS,
         path="/",
     )
     return {"ok": True}

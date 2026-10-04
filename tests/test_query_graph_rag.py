@@ -113,14 +113,29 @@ def test_validate_mode_rejects_unknown_value(capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_build_prompt_local_mode_skips_get_communities(store, monkeypatch):
+def test_build_prompt_local_mode_never_touches_communities(store, monkeypatch):
     patch_local_embed(monkeypatch)
 
     calls = []
-    original = store.get_communities
-    store.get_communities = lambda: calls.append(1) or original()  # type: ignore[method-assign]
+    original_get = store.get_communities
+    original_has = store.has_community_summaries
+    store.get_communities = lambda: calls.append("get") or original_get()  # type: ignore[method-assign]
+    store.has_community_summaries = (  # type: ignore[method-assign]
+        lambda: calls.append("has") or original_has()
+    )
 
     _build_prompt("question", "local", store, _empty_qdrant())
+
+    assert calls == []
+
+
+def test_build_prompt_auto_mode_checks_for_summaries_without_loading_them(store, monkeypatch):
+    patch_local_embed(monkeypatch)
+    calls = []
+    original_get = store.get_communities
+    store.get_communities = lambda: calls.append("get") or original_get()  # type: ignore[method-assign]
+
+    _build_prompt("question", "auto", store, _empty_qdrant())  # no summaries -> local route
 
     assert calls == []
 

@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from local_graph_rag.rag.query_graph_rag import GraphMode
 from local_graph_rag.settings import (
     MAX_CHAT_CONTENT_ITEMS,
     MAX_CHAT_MESSAGE_CHARS,
@@ -13,8 +14,6 @@ from local_graph_rag.settings import (
     MAX_CHAT_TOTAL_CHARS,
     MAX_MODEL_NAME_CHARS,
 )
-
-GraphMode = Literal["auto", "local", "global"]
 
 
 class LoginRequest(BaseModel):

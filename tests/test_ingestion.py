@@ -427,3 +427,29 @@ def test_index_file_counts_a_failed_fingerprint_write_as_failed(
     monkeypatch.setattr(store, "upsert_hash", _locked)
 
     assert _index_file(doc, store, _FakeQdrant()) == "failed"
+
+
+def test_main_counts_a_file_whose_indexing_raises_as_failed(
+    tmp_path: Path,
+    store: GraphStore,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """One file's unexpected error (e.g. "database is locked" reading its fingerprint)
+    must not abort the run."""
+    good, bad = tmp_path / "good.md", tmp_path / "bad.md"
+    monkeypatch.setattr(_idx_mod, "GraphStore", lambda: store)
+    monkeypatch.setattr(_idx_mod, "get_qdrant_client", lambda: _FakeQdrant())
+    monkeypatch.setattr(_idx_mod, "ensure_collection", lambda _client: None)
+    monkeypatch.setattr(_idx_mod, "_collect_files", lambda: ([bad, good], []))
+
+    def _index(path: Path, *_args: object) -> str:
+        if path == bad:
+            raise sqlite3.OperationalError("database is locked")
+        return "indexed"
+
+    monkeypatch.setattr(_idx_mod, "_index_file", _index)
+
+    _idx_mod.main()
+
+    assert "indexed: 1, skipped: 0, failed: 1" in capsys.readouterr().out

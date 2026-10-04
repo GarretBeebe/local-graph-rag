@@ -166,3 +166,36 @@ def test_build_summary_prompt_contains_entities_and_relationships():
     assert "CLASS" in prompt
     assert "calls" in prompt
     assert "beta" in prompt
+
+
+def test_build_summary_prompt_names_relationship_endpoints():
+    entities = [
+        {"id": "alpha", "name": "Alpha", "type": "CLASS", "description": "a"},
+        {"id": "beta", "name": "Beta", "type": "CLASS", "description": "b"},
+    ]
+    relationships = [{"source_id": "alpha", "target_id": "beta", "label": "calls", "weight": 1.0}]
+    assert "- Alpha --[calls]--> Beta" in _build_summary_prompt(entities, relationships)
+
+
+def test_build_summary_prompt_caps_entities_relationships_and_descriptions():
+    entities = [
+        {"id": f"e{i:02d}", "name": f"E{i:02d}", "type": "T", "description": "x" * 1000}
+        for i in range(45)
+    ]
+    # e44 is the best connected, so it must survive the cap despite sorting last by id.
+    relationships = [
+        {"source_id": "e44", "target_id": f"e{i:02d}", "label": "uses", "weight": 1.0}
+        for i in range(44)
+    ] + [
+        {"source_id": "e00", "target_id": "e01", "label": f"r{i}", "weight": 0.5}
+        for i in range(30)
+    ]
+
+    prompt = _build_summary_prompt(entities, relationships)
+
+    entity_lines = [line for line in prompt.splitlines() if " (T): " in line]
+    assert len(entity_lines) == 40
+    assert any(line.startswith("- E44 ") for line in entity_lines)
+    assert "- ... and 5 more" in prompt
+    assert all(line.endswith("x" * 300) and "x" * 301 not in line for line in entity_lines)
+    assert sum(1 for line in prompt.splitlines() if "--[" in line) == 60

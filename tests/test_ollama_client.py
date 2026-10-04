@@ -132,3 +132,17 @@ def test_embed_batch_sends_keep_alive_when_configured(monkeypatch: pytest.Monkey
     embed_mod.embed_batch(["text"])
 
     assert sent[0]["keep_alive"] == "30m"
+
+
+def test_embed_uses_the_batch_endpoint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ollama_client, "OLLAMA_KEEP_ALIVE", "")
+    sent: list[tuple[str, dict]] = []
+
+    def _fake_post(path: str, **kwargs) -> _FakeResponse:
+        sent.append((path, kwargs["json"]))
+        return _FakeResponse({"embeddings": [[0.5] * embed_mod.VECTOR_SIZE]})
+
+    monkeypatch.setattr(embed_mod.ollama_client, "post_with_retry", _fake_post)
+
+    assert embed_mod.embed("hello") == [0.5] * embed_mod.VECTOR_SIZE
+    assert sent == [("/api/embed", {"model": embed_mod.EMBED_MODEL, "input": ["hello"]})]

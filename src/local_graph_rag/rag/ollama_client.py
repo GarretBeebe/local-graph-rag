@@ -47,10 +47,6 @@ def close_session() -> None:
         del _thread_local.session
 
 
-def post(path: str, **kwargs: Any) -> requests.Response:
-    return _get_session().post(_url(path), **kwargs)
-
-
 def get(path: str, **kwargs: Any) -> requests.Response:
     return _get_session().get(_url(path), **kwargs)
 

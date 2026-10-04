@@ -95,7 +95,7 @@ Ingestion is safe to interrupt and guarantees consistent state across restarts:
 |---|---|
 | Vector store | Qdrant |
 | Graph store | SQLite (storage + indexed traversal); NetworkX for community detection |
-| Community detection | Louvain (NetworkX, fixed seed) |
+| Community detection | Louvain (NetworkX, fixed seed) over LLM relationships; chunk co-occurrence places the rest |
 | LLM / embeddings | Ollama |
 | Web framework | FastAPI |
 | Package manager | uv |
@@ -131,6 +131,10 @@ docker compose --profile summarizer run --rm summarizer
 # Re-run with --force to regenerate all summaries even if membership is unchanged
 docker compose --profile summarizer run --rm summarizer graph-rag-summarize --force
 ```
+
+Communities come from seeded Louvain over LLM-extracted relationships. Entities with no
+relationships join the community they most often share chunks with, or form communities with
+the entities they co-occur with. That brings most entities into some community summary.
 
 The summarizer is idempotent: community detection is seeded, and a community whose members,
 descriptions, and relationships are unchanged reuses its existing summary (matched by SHA-256

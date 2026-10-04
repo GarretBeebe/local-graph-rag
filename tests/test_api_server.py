@@ -1,14 +1,20 @@
 """Unit tests for web/api_server.py — auth, endpoints, streaming gate."""
 
+import asyncio
+import hashlib
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import bcrypt
 import pytest
 from fastapi.testclient import TestClient
 
+import local_graph_rag.web.rag_executor as rag_executor
 from local_graph_rag.common.sqlite_store import SqliteStore
+from local_graph_rag.web import user_store
 from tests.helpers import CHAT_COMPLETIONS_PATH, bearer_headers, chat_payload
 
 _TEST_API_KEY = "test-bearer-key-abc"
@@ -199,3 +205,88 @@ def test_chat_explicit_graph_mode_is_forwarded(insecure_client):
             json=chat_payload(graph_mode="local"),
         )
     assert mock_ask.call_args[0][2] == "local"
+
+
+
+# ---------------------------------------------------------------------------
+# Streaming
+# ---------------------------------------------------------------------------
+
+
+def test_chat_stream_relays_generated_text(insecure_client):
+    with patch.object(rag_executor, "ask_stream_sync", return_value=iter(["Hello", " world"])):
+        resp = insecure_client.post(CHAT_COMPLETIONS_PATH, json=chat_payload(stream=True))
+
+    assert resp.status_code == 200
+    assert '"content": "Hello"' in resp.text
+    assert '"content": " world"' in resp.text
+    assert resp.text.rstrip().endswith("data: [DONE]")
+
+
+def test_stream_worker_finishes_when_the_consumer_never_reads(monkeypatch: pytest.MonkeyPatch):
+    """A consumer that stops reading must not strand the worker on a full queue."""
+    executor = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(rag_executor, "_RAG_EXECUTOR", executor)
+    monkeypatch.setattr(rag_executor, "_RAG_CONCURRENCY", asyncio.Semaphore(1))
+    monkeypatch.setattr(rag_executor, "_store", MagicMock())
+    monkeypatch.setattr(rag_executor, "_client", MagicMock())
+    monkeypatch.setattr(rag_executor, "STREAM_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(rag_executor, "ask_stream_sync", lambda *a, **k: iter(["x"] * 100))
+
+    async def _never_read() -> int:
+        queue, _, future = await rag_executor._start_stream_worker("q", "model", "auto")
+        await asyncio.wait_for(future, timeout=5)
+        return queue.qsize()
+
+    try:
+        assert asyncio.run(_never_read()) == 32  # the queue filled, then the worker gave up
+    finally:
+        executor.shutdown(wait=True)
+
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+
+
+def _login(client: TestClient, username: str = "alice", password: str = "correct horse") -> str:
+    user_store.upsert_user(username, bcrypt.hashpw(password.encode(), bcrypt.gensalt(4)).decode())
+    resp = client.post("/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200
+    return client.cookies["rag_token"]
+
+
+def _stored_tokens() -> list[str]:
+    return [row[0] for row in user_store._store.conn.execute("SELECT token FROM sessions")]
+
+
+def test_login_session_authenticates_requests(authed_client):
+    _login(authed_client)
+    assert authed_client.get("/auth/status").json() == {"authenticated": True}
+
+
+def test_session_tokens_are_stored_only_as_hashes(authed_client):
+    raw = _login(authed_client)
+
+    stored = _stored_tokens()
+
+    assert stored == [hashlib.sha256(raw.encode()).hexdigest()]
+    assert user_store.validate_session(raw) == "alice"
+    assert user_store.validate_session(stored[0]) is None  # a leaked hash is not a credential
+
+
+def test_logout_deletes_the_session(authed_client):
+    _login(authed_client)
+
+    authed_client.post("/auth/logout")
+
+    assert _stored_tokens() == []
+    assert authed_client.get("/auth/status").json() == {"authenticated": False}
+
+
+def test_changing_a_password_revokes_sessions(authed_client):
+    _login(authed_client)
+
+    user_store.upsert_user("alice", bcrypt.hashpw(b"new password", bcrypt.gensalt(4)).decode())
+
+    assert authed_client.get("/auth/status").json() == {"authenticated": False}

@@ -44,24 +44,12 @@ def _validate_vector(vector: list[float], model: str = EMBED_MODEL) -> list[floa
 
 
 def embed(text: str) -> list[float]:
-    """Return an embedding vector for the given text via the Ollama embeddings API."""
-    text = _prepare_text(text)
+    """Return an embedding vector for one text (same endpoint and limits as embed_batch).
 
-    response = ollama_client.post_with_retry(
-        "/api/embeddings",
-        json=ollama_client.with_keep_alive({"model": EMBED_MODEL, "prompt": text}),
-        timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
-    )
-
-    try:
-        data = response.json()
-    except ValueError as e:
-        raise RuntimeError(f"Embedding service returned invalid JSON: {e}") from e
-
-    if "embedding" not in data:
-        raise RuntimeError("Embedding response missing 'embedding' field")
-
-    return _validate_vector(data["embedding"])
+    /api/embed returns unit-length vectors where the superseded /api/embeddings did not;
+    the direction is identical (verified), and all retrieval scoring is cosine.
+    """
+    return embed_batch([text])[0]
 
 
 def embed_batch(texts: list[str]) -> list[list[float]]:

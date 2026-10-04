@@ -163,30 +163,36 @@ async def _start_stream_worker(
     store = _get_store()
     client = _get_client()
 
-    _put_timeout = STREAM_TIMEOUT_SECONDS
-    _put_errors = (RuntimeError, concurrent.futures.TimeoutError, concurrent.futures.CancelledError)
+    put_timeout = STREAM_TIMEOUT_SECONDS
+
+    def _put(item: str | Exception | None) -> bool:
+        """Hand one item to the async consumer; False once it is gone or stops reading."""
+        if cancel_event.is_set():
+            return False
+        coro = queue.put(item)
+        try:
+            delivery = asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:  # loop already closed: the coroutine was never scheduled
+            coro.close()
+            return False
+        try:
+            delivery.result(timeout=put_timeout)
+        except (concurrent.futures.TimeoutError, concurrent.futures.CancelledError):
+            # Once scheduled, the coroutine belongs to the loop: cancel it thread-safely
+            # rather than closing it from this worker thread.
+            delivery.cancel()
+            return False
+        return True
 
     def _run() -> None:
         try:
             for text in ask_stream_sync(question, model, graph_mode, store, client, cancel_event):
-                coro = queue.put(text)
-                try:
-                    asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=_put_timeout)
-                except _put_errors:
-                    coro.close()
+                if not _put(text):
                     return
         except Exception as exc:
-            coro = queue.put(exc)
-            try:
-                asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=_put_timeout)
-            except _put_errors:
-                coro.close()
+            _put(exc)
         finally:
-            coro = queue.put(None)
-            try:
-                asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=_put_timeout)
-            except _put_errors:
-                coro.close()
+            _put(None)
 
     started = time.monotonic()
     semaphore = await _wait_for_capacity(RAG_REQUEST_TIMEOUT_SECONDS)

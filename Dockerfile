@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 
+# curl serves the compose healthcheck. No compiler: every runtime dependency in uv.lock
+# ships a Linux wheel.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ curl && \
+    curl && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.11.14
@@ -12,14 +14,19 @@ RUN addgroup --system appgroup && \
 
 WORKDIR /app
 
+# Compile .pyc at build time: at runtime appuser can't write __pycache__ and
+# PYTHONDONTWRITEBYTECODE is set, so otherwise every container start recompiles every import.
+ENV UV_COMPILE_BYTECODE=1
+
 # Install dependencies before copying source so this layer is cached unless
 # pyproject.toml or uv.lock change (not on every source edit).
 COPY --chown=appuser:appgroup pyproject.toml uv.lock ./
-RUN UV_SYSTEM_PYTHON=1 uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy source and install the project itself (non-editable).
+# Copy source and install the project itself. uv installs it editable, which settings.py
+# relies on: PROJECT_ROOT (and the data/ directory under it) resolves to /app.
 COPY --chown=appuser:appgroup . .
-RUN UV_SYSTEM_PYTHON=1 uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1

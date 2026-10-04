@@ -23,17 +23,11 @@ def global_retrieve(
     store: GraphStore,
     *,
     n: int = COMMUNITY_RETRIEVAL_N,
-    communities: list[dict] | None = None,
 ) -> GlobalContext:
-    """Cosine similarity over community embeddings to find the top-N relevant summaries.
-
-    Pass pre-fetched communities to avoid a redundant DB round-trip when the caller
-    already holds them (e.g. for the communities_available check in the router).
-    """
-    if communities is None:
-        communities = store.get_communities()
-
-    relevant = [c for c in communities if c["embedding"] is not None and c["summary"]]
+    """Cosine similarity over community embeddings to find the top-N relevant summaries."""
+    relevant = [
+        c for c in store.get_communities() if c["embedding"] is not None and c["summary"]
+    ]
     if not relevant:
         logger.warning("global_retrieve: no community summaries available")
         return GlobalContext()

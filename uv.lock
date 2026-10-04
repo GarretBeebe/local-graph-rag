@@ -517,7 +517,7 @@ dev = [
 requires-dist = [
     { name = "bcrypt" },
     { name = "fastapi" },
-    { name = "networkx" },
+    { name = "networkx", specifier = ">=2.8" },
     { name = "numpy" },
     { name = "pyyaml" },
     { name = "qdrant-client" },

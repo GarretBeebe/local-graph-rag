@@ -21,7 +21,9 @@ class SqliteStore:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        if not hasattr(self._local, "conn"):
+        # Read _local once: close() may replace it at any moment from another thread.
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
             # check_same_thread=False only so close() can run on another thread; each
             # connection is otherwise used solely by the thread that opened it.
@@ -44,8 +46,10 @@ class SqliteStore:
                         existing.close()
                 live.append((threading.current_thread(), conn))
                 self._conns = live
-            self._local.conn = conn
-        return self._local.conn
+                # Cache under the same lock as registration, so close() can't land between
+                # them and leave this thread holding a connection it already closed.
+                self._local.conn = conn
+        return conn
 
     def close(self) -> None:
         """Close every thread's connection; later access opens fresh ones."""

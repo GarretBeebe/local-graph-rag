@@ -146,15 +146,17 @@ def chunk_python(text: str) -> list[tuple[str, str | None]]:
 # -------------------------
 
 HEADER_PATTERN = re.compile(r"^#{1,6} ")
-_FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _split_markdown_sections(text: str) -> list[str]:
     """Split a markdown document into sections at header boundaries.
 
     Lines inside fenced code blocks are never headers — a "# comment" in a shell snippet
-    must not cut the block in two. A fence closes only on the same character repeated at
-    least as many times; an unclosed fence runs to the end of the document.
+    must not cut the block in two. Per CommonMark, a backtick fence's info string can't
+    contain a backtick (```x``` is inline code), and a fence closes only on the same
+    character repeated at least as many times with nothing after it; an unclosed fence
+    runs to the end of the document.
     """
     lines = text.splitlines()
     sections: list[str] = []
@@ -164,10 +166,11 @@ def _split_markdown_sections(text: str) -> list[str]:
     for line in lines:
         fence = _FENCE_PATTERN.match(line)
         if fence:
-            marker = fence.group(1)
+            marker, rest = fence.group(1), fence.group(2)
             if open_fence is None:
-                open_fence = marker
-            elif marker[0] == open_fence[0] and len(marker) >= len(open_fence):
+                if not (marker[0] == "`" and "`" in rest):
+                    open_fence = marker
+            elif marker[0] == open_fence[0] and len(marker) >= len(open_fence) and not rest.strip():
                 open_fence = None
         elif open_fence is None and HEADER_PATTERN.match(line) and current:
             sections.append("\n".join(current))

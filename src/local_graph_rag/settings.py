@@ -42,6 +42,7 @@ OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "")
 API_KEY = os.environ.get("API_KEY", "")
 ALLOW_INSECURE_LOCALONLY = os.environ.get("ALLOW_INSECURE_LOCALONLY", "").lower() in ("1", "true")
 SESSION_EXPIRY_HOURS = int(os.environ.get("SESSION_EXPIRY_HOURS", "8"))
+SESSION_EXPIRY_SECONDS = SESSION_EXPIRY_HOURS * 60 * 60  # cookie max_age and DB expiry agree
 _raw_trusted_proxies = os.environ.get("TRUSTED_PROXY_IPS", "")
 TRUSTED_PROXY_IPS: set[str] = {ip.strip() for ip in _raw_trusted_proxies.split(",") if ip.strip()}
 _raw_cors_origins = os.environ.get("CORS_ORIGINS", "")

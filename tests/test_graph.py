@@ -5,8 +5,10 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import networkx as nx
 import pytest
 
+from local_graph_rag.graph.community_store import _cluster
 from local_graph_rag.graph.extractor import (
     ExtractionResult,
     _parse_extraction_response,
@@ -87,6 +89,38 @@ def test_close_closes_all_connections_and_later_access_reopens(store: GraphStore
     with pytest.raises(sqlite3.ProgrammingError):
         first.execute("SELECT 1")
     assert store.conn.execute("SELECT 1").fetchone()[0] == 1
+
+
+def test_close_racing_a_new_connection_never_leaves_a_closed_one_cached(store: GraphStore):
+    """Regression: close() landing just after a thread registered its connection (but before
+    the thread cached it) left the thread holding a closed connection."""
+    real_lock = store._conns_lock
+    raced = threading.Event()
+
+    class _CloseRightAfterRelease:
+        def __enter__(self):
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc_info):
+            real_lock.__exit__(*exc_info)
+            if threading.current_thread() is not threading.main_thread() and not raced.is_set():
+                raced.set()
+                store.close()
+            return False
+
+    store._conns_lock = _CloseRightAfterRelease()
+    results: list[int] = []
+
+    def _worker() -> None:
+        _ = store.conn  # registers its connection; close() runs as the lock is released
+        results.append(store.conn.execute("SELECT 1").fetchone()[0])
+
+    worker = threading.Thread(target=_worker)
+    worker.start()
+    worker.join()
+
+    assert raced.is_set()
+    assert results == [1]
 
 
 def test_connections_of_exited_threads_are_closed_when_a_new_thread_connects(
@@ -596,6 +630,57 @@ def test_build_networkx_graph_sums_weights_across_docs_labels_and_directions(sto
     assert graph["a"]["b"]["weight"] == 4.0
 
 
+def _link_chunk(store: GraphStore, chunk_id: str, *names: str) -> None:
+    """Register a chunk mentioning `names` (entities created as needed)."""
+    store.register_chunks([(chunk_id, "doc.py", 0)])
+    store.link_chunks([(chunk_id, add_entity(store, name)) for name in names])
+
+
+def test_cooccurrence_weights_split_each_chunk_across_its_entities(store: GraphStore):
+    _link_chunk(store, "c1", "a", "b", "c")  # 3 entities -> 0.5 / 2 per pair
+    _link_chunk(store, "c2", "a", "b")  # 2 entities -> 0.5 per pair
+    _link_chunk(store, "c3", "d")  # a lone entity has no pairs
+
+    assert store._cooccurrence_weights() == {
+        ("a", "b"): 0.75,
+        ("a", "c"): 0.25,
+        ("b", "c"): 0.25,
+    }
+
+
+def _llm_graph(*edges: tuple[str, str]) -> nx.Graph:
+    graph = nx.Graph()
+    graph.add_weighted_edges_from((a, b, 1.0) for a, b in edges)
+    return graph
+
+
+def test_cluster_attaches_an_entity_to_its_strongest_cooccurrence_community():
+    communities = _cluster(_llm_graph(("a", "b"), ("c", "d")), {("a", "x"): 0.2, ("c", "x"): 0.5})
+    assert communities == [{"a", "b"}, {"c", "d", "x"}]
+
+
+def test_cluster_breaks_attachment_ties_toward_the_lowest_community():
+    communities = _cluster(_llm_graph(("a", "b"), ("c", "d")), {("a", "x"): 0.5, ("c", "x"): 0.5})
+    assert communities == [{"a", "b", "x"}, {"c", "d"}]
+
+
+def test_cluster_groups_entities_that_only_cooccur_with_each_other():
+    communities = _cluster(_llm_graph(("a", "b")), {("y", "z"): 0.5})
+    assert communities == [{"a", "b"}, {"y", "z"}]
+
+
+def test_cluster_leaves_entities_without_any_edges_unassigned():
+    assert _cluster(_llm_graph(), {}) == []
+
+
+def test_detect_communities_places_entities_that_only_share_chunks(store: GraphStore):
+    _link_chunk(store, "c1", "lonely", "partner")  # no LLM relationship at all
+    store.detect_communities()
+    lonely, partner = _entity(store, "lonely"), _entity(store, "partner")
+    assert lonely["community"] is not None
+    assert lonely["community"] == partner["community"]
+
+
 def _community_assignments(store: GraphStore) -> dict[str, int]:
     rows = store.conn.execute("SELECT id, community FROM entities WHERE community IS NOT NULL")
     return {row["id"]: row["community"] for row in rows}
@@ -609,6 +694,9 @@ def test_detect_communities_is_deterministic_on_an_unchanged_graph(store: GraphS
         # Three loosely linked rings of ten: several communities, many tie-breaking choices.
         add_relationship(store, names[i], names[(i + 1) % 10 + 10 * (i // 10)], "uses", "d.py")
         add_relationship(store, names[i], names[(i * 7) % 30], "mentions", "d.py")
+    for i in range(20):
+        # Chunk-only entities exercise co-occurrence attachment and residual clustering.
+        _link_chunk(store, f"chunk{i}", f"extra{i}", f"extra{(i + 1) % 20}", names[i % 7])
 
     store.detect_communities()
     first = _community_assignments(store)

@@ -443,7 +443,14 @@ def main() -> None:
     counts: dict[str, int] = {"indexed": 0, "skipped": 0, "failed": 0}
     try:
         for f in tqdm(files, desc="Indexing"):
-            counts[_index_file(f, store, client)] += 1
+            try:
+                outcome = _index_file(f, store, client)
+            except Exception:
+                # e.g. "database is locked" reading the fingerprint, or a parser
+                # RecursionError: count one failed file instead of aborting the run.
+                logger.exception("Indexing failed for %s", f)
+                outcome = "failed"
+            counts[outcome] += 1
     finally:
         store.close()
     print(

@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import sys
+from collections import Counter
 
 import numpy as np
 
@@ -24,6 +25,12 @@ Write a concise summary (3-5 sentences) of what this community is about, \
 the key entities and their roles, and how they relate to each other.
 
 Summary:"""
+
+# Large communities would otherwise outgrow the 120 s generation budget on CPU: show the
+# best-connected entities, the heaviest relationships, and clipped descriptions.
+_MAX_SUMMARY_ENTITIES = 40
+_MAX_SUMMARY_RELATIONSHIPS = 60
+_MAX_DESCRIPTION_CHARS = 300
 
 
 def _compute_member_hash(entities: list[dict], relationships: list[dict]) -> str:
@@ -48,16 +55,28 @@ def _compute_member_hash(entities: list[dict], relationships: list[dict]) -> str
 
 
 def _build_summary_prompt(entities: list[dict], relationships: list[dict]) -> str:
-    entity_lines = "\n".join(
-        f"- {e['name']} ({e.get('type') or 'unknown'}): {e.get('description') or ''}"
-        for e in entities
-    )
-    entity_block = f"Entities:\n{entity_lines}"
+    names = {e["id"]: e["name"] for e in entities}
+    degree = Counter(r["source_id"] for r in relationships)
+    degree.update(r["target_id"] for r in relationships)
+    shown = sorted(entities, key=lambda e: (-degree[e["id"]], e["id"]))[:_MAX_SUMMARY_ENTITIES]
+    entity_lines = [
+        f"- {e['name']} ({e.get('type') or 'unknown'}): "
+        f"{(e.get('description') or '')[:_MAX_DESCRIPTION_CHARS]}"
+        for e in shown
+    ]
+    if len(entities) > len(shown):
+        entity_lines.append(f"- ... and {len(entities) - len(shown)} more")
+    entity_block = "Entities:\n" + "\n".join(entity_lines)
 
-    if relationships:
+    heaviest = sorted(
+        relationships,
+        key=lambda r: (-r.get("weight", 0), r["source_id"], r["target_id"], r["label"]),
+    )[:_MAX_SUMMARY_RELATIONSHIPS]
+    if heaviest:
         rel_lines = "\n".join(
-            f"- {r['source_id']} --[{r['label']}]--> {r['target_id']}"
-            for r in relationships
+            f"- {names.get(r['source_id'], r['source_id'])} --[{r['label']}]--> "
+            f"{names.get(r['target_id'], r['target_id'])}"
+            for r in heaviest
         )
         relationship_block = f"Relationships:\n{rel_lines}\n"
     else:
@@ -109,20 +128,8 @@ def summarize_community(
             return False
 
     prompt = _build_summary_prompt(entities, relationships)
-
-    try:
-        summary = ollama_client.generate(prompt, SUMMARIZE_MODEL).strip()
-    except Exception as e:
-        logger.error("LLM summarization failed for community %d: %s", community_id, e)
-        raise
-
-    try:
-        embedding_vec = embed(summary)
-    except Exception as e:
-        logger.error("Embedding failed for community %d: %s", community_id, e)
-        raise
-
-    embedding_blob = np.array(embedding_vec, dtype=np.float32).tobytes()
+    summary = ollama_client.generate(prompt, SUMMARIZE_MODEL).strip()
+    embedding_blob = np.array(embed(summary), dtype=np.float32).tobytes()
     store.upsert_community(community_id, summary, entity_ids, new_hash, embedding_blob)
     logger.info(
         "Community %d summarized: %d entities, %d relationships",

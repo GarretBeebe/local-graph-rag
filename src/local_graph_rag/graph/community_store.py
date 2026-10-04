@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections import defaultdict
 from itertools import zip_longest
 
 import networkx as nx
@@ -11,6 +12,45 @@ logger = logging.getLogger(__name__)
 _ACTIVE_COMMUNITY_IDS_SQL = "SELECT DISTINCT community FROM entities WHERE community IS NOT NULL"
 # Fixed so an unchanged graph always yields the same partition and community ids.
 _LOUVAIN_SEED = 42
+# Weight a chunk adds between each pair of entities it mentions, split across them
+# (0.5 / (n - 1)) so chunks naming many entities don't dominate.
+_COOCCURRENCE_WEIGHT = 0.5
+
+
+def _louvain(graph: nx.Graph) -> list[set[str]]:
+    """Seeded Louvain; communities ordered by their smallest member so ids are stable."""
+    if graph.number_of_nodes() == 0:
+        return []
+    communities = nx.community.louvain_communities(graph, weight="weight", seed=_LOUVAIN_SEED)
+    return [set(c) for c in sorted(communities, key=min)]
+
+
+def _cluster(llm_graph: nx.Graph, cooccurrence: dict[tuple[str, str], float]) -> list[set[str]]:
+    """Partition entities: Louvain over LLM relationships, then place the rest by co-occurrence.
+
+    An entity with no LLM relationship joins the LLM community it shares the most chunk
+    co-occurrence with (ties: lowest community); entities that only co-occur with each other
+    get Louvain communities of their own. Running Louvain over the far denser co-occurrence
+    graph instead reshuffles many communities on every edit, and each reshuffled community
+    costs a fresh LLM summary.
+    """
+    communities = _louvain(llm_graph)
+    community_of = {entity: i for i, members in enumerate(communities) for entity in members}
+    affinity: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+    for (a, b), weight in cooccurrence.items():
+        if a in community_of and b not in community_of:
+            affinity[b][community_of[a]] += weight
+        elif b in community_of and a not in community_of:
+            affinity[a][community_of[b]] += weight
+    for entity, scores in affinity.items():
+        communities[min(scores.items(), key=lambda kv: (-kv[1], kv[0]))[0]].add(entity)
+
+    placed = community_of.keys() | affinity.keys()
+    residual = nx.Graph()
+    residual.add_weighted_edges_from(
+        (a, b, w) for (a, b), w in cooccurrence.items() if a not in placed and b not in placed
+    )
+    return communities + _louvain(residual)
 
 
 class CommunityStoreMixin:
@@ -28,23 +68,34 @@ class CommunityStoreMixin:
         graph.add_weighted_edges_from((row["a"], row["b"], row["weight"]) for row in rows)
         return graph
 
+    def _cooccurrence_weights(self) -> dict[tuple[str, str], float]:
+        """Return {(a, b): weight} (a < b) for entity pairs linked to the same chunks."""
+        rows = self.conn.execute(
+            """
+            SELECT a.entity_id AS a, b.entity_id AS b, SUM(:weight / (n.n - 1)) AS weight
+            FROM chunk_entities a
+            JOIN chunk_entities b ON b.chunk_id = a.chunk_id AND a.entity_id < b.entity_id
+            JOIN (SELECT chunk_id, COUNT(*) AS n FROM chunk_entities GROUP BY chunk_id) n
+              ON n.chunk_id = a.chunk_id
+            GROUP BY a.entity_id, b.entity_id
+            ORDER BY a.entity_id, b.entity_id
+            """,
+            {"weight": _COOCCURRENCE_WEIGHT},
+        )
+        return {(row["a"], row["b"]): row["weight"] for row in rows}
+
     def detect_communities(self) -> None:
-        """Run seeded Louvain community detection and write community IDs back to entities."""
-        graph = self.build_networkx_graph()
-        partition: dict[str, int] = {}
-        if len(graph.nodes) == 0:
+        """Assign community ids (see _cluster) and write them back to entities."""
+        communities = _cluster(self.build_networkx_graph(), self._cooccurrence_weights())
+        partition = {
+            entity_id: community_id
+            for community_id, members in enumerate(communities)
+            for entity_id in members
+        }
+        if not partition:
             logger.warning(
                 "detect_communities: graph is empty — clearing all community assignments"
             )
-        else:
-            communities = nx.community.louvain_communities(
-                graph, weight="weight", seed=_LOUVAIN_SEED
-            )
-            partition = {
-                entity_id: community_id
-                for community_id, members in enumerate(sorted(communities, key=min))
-                for entity_id in members
-            }
 
         with self._write():
             self.conn.execute("UPDATE entities SET community = NULL")
@@ -186,6 +237,14 @@ class CommunityStoreMixin:
             dict(row, entity_ids=json.loads(row["entity_ids"]) if row["entity_ids"] else [])
             for row in rows
         ]
+
+    def has_community_summaries(self) -> bool:
+        """Return True if any community has both a summary and an embedding."""
+        row = self.conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM communities "
+            "WHERE embedding IS NOT NULL AND summary != '')"
+        ).fetchone()
+        return bool(row[0])
 
     def get_active_community_ids(self) -> set[int]:
         """Return distinct community IDs currently assigned to entities."""
