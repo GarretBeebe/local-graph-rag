@@ -48,9 +48,15 @@ dependency removal. In order:
            c.execute('PRAGMA foreign_key_check').fetchall())"
    ```
 
-5. **Expect one expensive summarizer run.** NetworkX's seeded Louvain partitions differently from
-   `python-louvain`, and relationship lines are now de-duplicated, so the first run re-summarizes
-   nearly every community. Later runs on an unchanged graph make no LLM calls.
+5. **Run the summarizer once.** Only communities whose content changed get a new summary. Any
+   community whose members, descriptions and relationships match a stored summary reuses it, even
+   if NetworkX's Louvain gave it a new id, so no LLM call is made. Later runs on an unchanged graph
+   make no LLM calls.
+   - Actual result on 2026-10-04: 3 of 105 communities summarized and 102 reused, in about
+     2 minutes; a second run summarized none.
+   - Changes can raise the count: a different partition on a denser graph, or relationship lines
+     that were duplicated across documents (now de-duplicated). Each re-summarized community
+     costs about 20 s on CPU.
 
 6. **Expect re-extraction only for files that get reprocessed.** Migration v3 dropped the old
    extraction cache because its rows had no request hash and could not be replayed safely. Files
