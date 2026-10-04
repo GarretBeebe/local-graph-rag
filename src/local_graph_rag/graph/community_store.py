@@ -22,33 +22,40 @@ def _louvain(graph: nx.Graph) -> list[set[str]]:
     if graph.number_of_nodes() == 0:
         return []
     communities = nx.community.louvain_communities(graph, weight="weight", seed=_LOUVAIN_SEED)
-    return [set(c) for c in sorted(communities, key=min)]
+    return sorted(communities, key=min)
 
 
 def _cluster(llm_graph: nx.Graph, cooccurrence: dict[tuple[str, str], float]) -> list[set[str]]:
     """Partition entities: Louvain over LLM relationships, then place the rest by co-occurrence.
 
-    An entity with no LLM relationship joins the LLM community it shares the most chunk
-    co-occurrence with (ties: lowest community); entities that only co-occur with each other
-    get Louvain communities of their own. Running Louvain over the far denser co-occurrence
-    graph instead reshuffles many communities on every edit, and each reshuffled community
-    costs a fresh LLM summary.
+    An entity with no LLM relationship joins the community it shares the most chunk
+    co-occurrence with (ties: lowest community). Attaching repeats until nothing new joins, so
+    an entity that only co-occurs with attached entities is placed too; entities with no
+    co-occurrence path to any LLM community get Louvain communities of their own. Running
+    Louvain over the far denser co-occurrence graph instead reshuffles many communities on
+    every edit, and each reshuffled community costs a fresh LLM summary.
     """
     communities = _louvain(llm_graph)
     community_of = {entity: i for i, members in enumerate(communities) for entity in members}
-    affinity: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
-    for (a, b), weight in cooccurrence.items():
-        if a in community_of and b not in community_of:
-            affinity[b][community_of[a]] += weight
-        elif b in community_of and a not in community_of:
-            affinity[a][community_of[b]] += weight
-    for entity, scores in affinity.items():
-        communities[min(scores.items(), key=lambda kv: (-kv[1], kv[0]))[0]].add(entity)
+    while True:
+        affinity: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+        for (a, b), weight in cooccurrence.items():
+            if a in community_of and b not in community_of:
+                affinity[b][community_of[a]] += weight
+            elif b in community_of and a not in community_of:
+                affinity[a][community_of[b]] += weight
+        if not affinity:
+            break
+        for entity, scores in affinity.items():
+            best = min(scores.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+            communities[best].add(entity)
+            community_of[entity] = best
 
-    placed = community_of.keys() | affinity.keys()
     residual = nx.Graph()
     residual.add_weighted_edges_from(
-        (a, b, w) for (a, b), w in cooccurrence.items() if a not in placed and b not in placed
+        (a, b, w)
+        for (a, b), w in cooccurrence.items()
+        if a not in community_of and b not in community_of
     )
     return communities + _louvain(residual)
 
@@ -80,36 +87,31 @@ class CommunityStoreMixin:
             GROUP BY a.entity_id, b.entity_id
             ORDER BY a.entity_id, b.entity_id
             """,
-            {"weight": _COOCCURRENCE_WEIGHT},
+            {"weight": float(_COOCCURRENCE_WEIGHT)},  # an int here would divide as integers
         )
         return {(row["a"], row["b"]): row["weight"] for row in rows}
 
     def detect_communities(self) -> None:
         """Assign community ids (see _cluster) and write them back to entities."""
         communities = _cluster(self.build_networkx_graph(), self._cooccurrence_weights())
-        partition = {
-            entity_id: community_id
+        assignments = [
+            (community_id, entity_id)
             for community_id, members in enumerate(communities)
             for entity_id in members
-        }
-        if not partition:
-            logger.warning(
-                "detect_communities: graph is empty — clearing all community assignments"
-            )
-
+        ]
         with self._write():
             self.conn.execute("UPDATE entities SET community = NULL")
-            if partition:
-                self.conn.executemany(
-                    "UPDATE entities SET community = ? WHERE id = ?",
-                    [(comm_id, entity_id) for entity_id, comm_id in partition.items()],
-                )
+            self.conn.executemany("UPDATE entities SET community = ? WHERE id = ?", assignments)
 
-        if partition:
+        if assignments:
             logger.info(
                 "detect_communities: assigned %d entities to %d communities",
-                len(partition),
-                len(set(partition.values())),
+                len(assignments),
+                len(communities),
+            )
+        else:
+            logger.warning(
+                "detect_communities: graph is empty — clearing all community assignments"
             )
 
     def expand_neighborhood(

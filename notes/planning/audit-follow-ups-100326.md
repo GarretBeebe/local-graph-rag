@@ -134,26 +134,59 @@ retrieval never saw them. All 813 are chunk-linked. Strategies were simulated on
 |---|---|---|
 | LLM relationships only (before) | 375 | 97% / 99% |
 | Louvain over LLM + co-occurrence edges | 1,097 | 87% / 92% |
-| **Hybrid (shipped)** | **1,064** | **97% / 99%** |
+| **Hybrid (shipped)** | **1,097** | **97% / 99%** |
 
 How the hybrid works:
 - Seeded Louvain runs over LLM relationships, as before.
-- Each entity without one joins the LLM community it most often shares chunks with.
-- Entities that only share chunks with each other form their own communities.
+- Each entity without one joins the LLM community it most often shares chunks with. This repeats
+  until nothing new joins, so an entity that only shares chunks with attached entities is placed
+  too. (The first version attached once and placed 1,064.)
+- Entities with no chunk-sharing path to an LLM community form their own communities.
 - Full co-occurrence Louvain was rejected: it reshuffles about 8% of communities per changed file,
   and each reshuffled community costs a fresh LLM summary.
 
 **Deploy note.**
-- The first summarizer run afterwards re-summarizes all 157 communities once. That's about
-  20 s each on this CPU, roughly 50–55 minutes, so run it off-hours.
-- Dry run on a production copy: the largest community (70 entities) gave a 721-token prompt and
-  took 24.6 s, well within the 120 s timeout.
-- Until that run, the existing summaries keep serving.
+- Community detection runs at the start of the summarizer, so production keeps its old LLM-only
+  communities (375 entities in 105) until the next summarizer run.
+- Dry run on a production copy: 1,097 entities in 143 communities (largest 78). 32 of them are
+  unchanged and reuse their summary by member hash, so the run summarizes 111. That's about
+  20 s each on this CPU, roughly 37 minutes, so run it off-hours.
+- Prompts are capped at 40 entities, so the largest community costs about what the earlier dry
+  run measured: a 70-entity community gave a 721-token prompt and took 24.6 s, well within the
+  120 s timeout.
+- During the run, the existing summaries keep serving.
 
 **Other effects of deploying this batch.**
 - Any session created before the deploy stops validating, because tokens are now looked up by
   hash. Users log in again; production had 0 active sessions.
 - The markdown fence fixes apply only to files that are re-indexed.
+
+## Review findings for the P3 batch — applied (2026-10-04)
+
+- **Repeated attach:** `_cluster` attaches until nothing new joins (1,064 → 1,097 entities placed).
+- **Image:**
+  - `.dockerignore` now excludes nested `__pycache__`/`*.pyc`, plus `.claude`, `.agents`, `notes`,
+    `tests` and `dist`.
+  - The Dockerfile compiles the project's own bytecode, which `UV_COMPILE_BYTECODE` skips.
+  - Result: 524 → 522 MB, API import 1.4 → 1.2 s.
+- **Indexer exit code:** the indexer exits 1 when any file failed.
+- **Integer-division guard:** the co-occurrence weight is passed to SQL as a float.
+- **Simplifications:**
+  - Errors in `_index_file` propagate to `main()`'s per-file guard, which logs them once with a
+    traceback; four catch-alls and `_embed_file_chunks` were removed.
+  - Smaller cleanups: `detect_communities`, `embed_batch`, the stream `_put`, `_build_prompt`, and
+    `global_retrieve` (which no longer normalizes the query vector).
+
+Not applied, all low priority:
+- **Stream end marker:** it is skipped after a disconnect cancels the stream. Harmless under
+  Starlette, which drops the stream at once.
+- **`SqliteStore.close()`:** it can crash the process if another thread is mid-query on that
+  connection. No caller does this.
+- **Stalled consumer:** a stalled stream consumer holds a worker for up to 2 × `STREAM_TIMEOUT`.
+- **Summary prompt cut:** the 40-entity cut is alphabetical among attached (degree 0) members.
+- **Fence parser:** it ignores non-breaking-space indentation and list or quote containers.
+- **Summarizer exit code:** the summarizer still exits 0 when a community fails, unlike the
+  indexer now.
 
 ## Follow-up candidates found while fixing P1/P2
 

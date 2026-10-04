@@ -581,9 +581,9 @@ def test_detect_communities_resets_stale_assignment_on_empty_graph(store: GraphS
     """An entity with no relationships must lose a stale community on an empty graph.
 
     build_networkx_graph only adds nodes via add_edge, so a graph with zero
-    relationships has zero nodes — detect_communities takes its early-exit branch
-    and never computes a partition. The reset must still run in that branch, or a
-    prior non-NULL community value is retained forever.
+    relationships and no shared chunks has zero nodes and clustering yields no
+    communities at all. The reset must still run, or a prior non-NULL community value
+    is retained forever.
     """
     slug = add_entity(store, "isolated")
     store.conn.execute("UPDATE entities SET community = ? WHERE id = ?", (7, slug))
@@ -598,10 +598,10 @@ def test_detect_communities_resets_isolated_entity_in_nonempty_graph(store: Grap
     """An isolated entity must lose its stale community even when OTHER entities
     form a non-empty graph and get freshly assigned.
 
-    Distinct code path from the empty-graph case: best_partition() runs and returns
-    a non-empty partition for the connected pair, but the isolated entity never
-    becomes a node (build_networkx_graph only adds nodes via add_edge) — so it's
-    absent from the partition and must be cleared by the reset, not left stale.
+    Distinct code path from the empty-graph case: Louvain runs and partitions the
+    connected pair, but the isolated entity never becomes a node (build_networkx_graph
+    only adds nodes via add_edge, and it shares no chunks) — so it's absent from the
+    partition and must be cleared by the reset, not left stale.
     """
     a = add_entity(store, "connected_a")
     add_entity(store, "connected_b")
@@ -669,8 +669,10 @@ def test_cluster_groups_entities_that_only_cooccur_with_each_other():
     assert communities == [{"a", "b"}, {"y", "z"}]
 
 
-def test_cluster_leaves_entities_without_any_edges_unassigned():
-    assert _cluster(_llm_graph(), {}) == []
+def test_cluster_attaches_entities_reachable_only_through_attached_entities():
+    # y co-occurs with LLM member a; x co-occurs only with y.
+    communities = _cluster(_llm_graph(("a", "b")), {("a", "y"): 0.5, ("x", "y"): 0.5})
+    assert communities == [{"a", "b", "x", "y"}]
 
 
 def test_detect_communities_places_entities_that_only_share_chunks(store: GraphStore):

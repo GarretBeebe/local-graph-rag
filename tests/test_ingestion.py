@@ -341,7 +341,8 @@ def test_index_file_keeps_previous_version_when_embedding_fails(
     monkeypatch.setattr(_idx_mod, "embed_batch", _ollama_down)
     client = _FakeQdrant()
 
-    assert _index_file(doc, store, client) == "failed"
+    with pytest.raises(RuntimeError, match="ollama down"):
+        _index_file(doc, store, client)
     assert store.get_chunks_for_file(filepath) == ["old-chunk"]
     assert client.deleted == []
 
@@ -415,20 +416,6 @@ def test_collect_files_marks_unenterable_directories_unscanned(
     assert unscanned == [locked.resolve()]
 
 
-def test_index_file_counts_a_failed_fingerprint_write_as_failed(
-    tmp_path: Path, store: GraphStore, monkeypatch: pytest.MonkeyPatch
-):
-    doc = tmp_path / "empty.md"
-    doc.write_text("")
-
-    def _locked(*args, **kwargs):
-        raise sqlite3.OperationalError("database is locked")
-
-    monkeypatch.setattr(store, "upsert_hash", _locked)
-
-    assert _index_file(doc, store, _FakeQdrant()) == "failed"
-
-
 def test_main_counts_a_file_whose_indexing_raises_as_failed(
     tmp_path: Path,
     store: GraphStore,
@@ -436,7 +423,7 @@ def test_main_counts_a_file_whose_indexing_raises_as_failed(
     capsys: pytest.CaptureFixture[str],
 ):
     """One file's unexpected error (e.g. "database is locked" reading its fingerprint)
-    must not abort the run."""
+    must not abort the run, but the run must still exit non-zero."""
     good, bad = tmp_path / "good.md", tmp_path / "bad.md"
     monkeypatch.setattr(_idx_mod, "GraphStore", lambda: store)
     monkeypatch.setattr(_idx_mod, "get_qdrant_client", lambda: _FakeQdrant())
@@ -450,6 +437,25 @@ def test_main_counts_a_file_whose_indexing_raises_as_failed(
 
     monkeypatch.setattr(_idx_mod, "_index_file", _index)
 
-    _idx_mod.main()
+    with pytest.raises(SystemExit) as exit_info:
+        _idx_mod.main()
 
+    assert exit_info.value.code == 1
     assert "indexed: 1, skipped: 0, failed: 1" in capsys.readouterr().out
+
+
+def test_main_exits_normally_when_no_file_fails(
+    tmp_path: Path,
+    store: GraphStore,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.setattr(_idx_mod, "GraphStore", lambda: store)
+    monkeypatch.setattr(_idx_mod, "get_qdrant_client", lambda: _FakeQdrant())
+    monkeypatch.setattr(_idx_mod, "ensure_collection", lambda _client: None)
+    monkeypatch.setattr(_idx_mod, "_collect_files", lambda: ([tmp_path / "good.md"], []))
+    monkeypatch.setattr(_idx_mod, "_index_file", lambda *_args: "indexed")
+
+    _idx_mod.main()  # no SystemExit: exit status 0
+
+    assert "indexed: 1, skipped: 0, failed: 0" in capsys.readouterr().out

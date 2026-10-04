@@ -163,8 +163,6 @@ async def _start_stream_worker(
     store = _get_store()
     client = _get_client()
 
-    put_timeout = STREAM_TIMEOUT_SECONDS
-
     def _put(item: str | Exception | None) -> bool:
         """Hand one item to the async consumer; False once it is gone or stops reading."""
         if cancel_event.is_set():
@@ -176,7 +174,7 @@ async def _start_stream_worker(
             coro.close()
             return False
         try:
-            delivery.result(timeout=put_timeout)
+            delivery.result(timeout=STREAM_TIMEOUT_SECONDS)
         except (concurrent.futures.TimeoutError, concurrent.futures.CancelledError):
             # Once scheduled, the coroutine belongs to the loop: cancel it thread-safely
             # rather than closing it from this worker thread.

@@ -55,10 +55,8 @@ def global_retrieve(
     matrix_norms[matrix_norms == 0] = 1.0
     matrix_unit = matrix / matrix_norms
 
-    q_norm = float(np.linalg.norm(q_vec))
-    q_unit = q_vec / q_norm if q_norm > 0 else q_vec
-
-    scores = matrix_unit @ q_unit
+    # Ranking only: scaling the query by its norm would not change the order.
+    scores = matrix_unit @ q_vec
     top_indices = np.argsort(scores)[::-1][:n]
 
     top = [usable[i] for i in top_indices]

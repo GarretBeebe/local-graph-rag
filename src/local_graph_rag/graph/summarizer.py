@@ -70,7 +70,7 @@ def _build_summary_prompt(entities: list[dict], relationships: list[dict]) -> st
 
     heaviest = sorted(
         relationships,
-        key=lambda r: (-r.get("weight", 0), r["source_id"], r["target_id"], r["label"]),
+        key=lambda r: (-r["weight"], r["source_id"], r["target_id"], r["label"]),
     )[:_MAX_SUMMARY_RELATIONSHIPS]
     if heaviest:
         rel_lines = "\n".join(

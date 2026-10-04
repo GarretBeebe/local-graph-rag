@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import uuid
 from pathlib import Path
 
@@ -249,37 +250,19 @@ def _write_index_data(
     return result
 
 
-def _cleanup_changed_file(
-    path: Path,
-    filepath: str,
-    store: GraphStore,
-    client: QdrantClient,
-) -> bool:
+def _cleanup_changed_file(filepath: str, store: GraphStore, client: QdrantClient) -> None:
     """Delete a changed file's Qdrant vectors, then its SQLite data and fingerprint.
 
     Qdrant first: if Qdrant fails, chunk IDs remain in SQLite so the next run
     can retry. If SQLite fails after Qdrant, stale SQLite rows are cleaned on
     next run's delete_file_data and the Qdrant delete is idempotent.
     """
-    try:
-        _delete_vectors(store, client, filepath)
-        store.delete_file_data(filepath)
-    except Exception as e:
-        logger.error("Cleanup before indexing failed for %s: %s", path, e)
-        return False
-    return True
+    _delete_vectors(store, client, filepath)
+    store.delete_file_data(filepath)
 
 
 def _chunk_file(path: Path, text: str) -> list[tuple[str, str | None]]:
     return [(c.strip(), name) for c, name in chunk_document(path, text) if c.strip()]
-
-
-def _embed_file_chunks(path: Path, chunks: list[str]) -> list[list[float]] | None:
-    try:
-        return embed_batch(chunks)
-    except Exception as e:
-        logger.error("Embedding failed for %s: %s", path, e)
-        return None
 
 
 def _build_points(
@@ -300,8 +283,9 @@ def _build_points(
 def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     """Process one file through the full pipeline. Returns 'indexed' | 'skipped' | 'failed'.
 
-    The new version is chunked and embedded before the old one is deleted, so a failure
-    there (e.g. Ollama unreachable) leaves the previous version searchable.
+    'failed' covers an unreadable file; any other error propagates to main(). The new
+    version is chunked and embedded before the old one is deleted, so a failure there
+    (e.g. Ollama unreachable) leaves the previous version searchable.
     """
     filepath = normalize_path(path)
 
@@ -318,31 +302,17 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     chunked = _chunk_file(path, text)
     if not chunked:
         logger.info("No chunks produced for %s — removing any previous index data", path)
-        if not _cleanup_changed_file(path, filepath, store, client):
-            return "failed"
+        _cleanup_changed_file(filepath, store, client)
         # Mark the empty content as processed so it isn't re-read every run; restoring the
         # old content changes the hash again, so it gets re-indexed.
-        try:
-            store.upsert_hash(filepath, current_hash)
-        except Exception as e:
-            logger.error("Recording fingerprint failed for %s: %s", path, e)
-            return "failed"
+        store.upsert_hash(filepath, current_hash)
         return "skipped"
     chunks = [c for c, _ in chunked]
 
-    vectors = _embed_file_chunks(path, chunks)
-    if vectors is None:
-        return "failed"
-
-    if not _cleanup_changed_file(path, filepath, store, client):
-        return "failed"
-
+    vectors = embed_batch(chunks)
+    _cleanup_changed_file(filepath, store, client)
     points = _build_points(filepath, chunked, vectors)
-    try:
-        result = _write_index_data(filepath, chunks, points, store, client, current_hash)
-    except Exception as e:
-        logger.error("Indexing failed for %s: %s", path, e)
-        return "failed"
+    result = _write_index_data(filepath, chunks, points, store, client, current_hash)
 
     logger.info(
         "Indexed %s: %d chunks, %d entities, %d of %d extracted relationships kept",
@@ -446,7 +416,7 @@ def main() -> None:
             try:
                 outcome = _index_file(f, store, client)
             except Exception:
-                # e.g. "database is locked" reading the fingerprint, or a parser
+                # e.g. Ollama or Qdrant unreachable, "database is locked", or a parser
                 # RecursionError: count one failed file instead of aborting the run.
                 logger.exception("Indexing failed for %s", f)
                 outcome = "failed"
@@ -458,6 +428,8 @@ def main() -> None:
         f"skipped: {counts['skipped']}, "
         f"failed: {counts['failed']}"
     )
+    if counts["failed"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

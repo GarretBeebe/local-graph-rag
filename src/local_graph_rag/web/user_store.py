@@ -79,7 +79,7 @@ def list_users() -> list[str]:
 
 
 def create_session(username: str, expiry_seconds: int) -> str:
-    """Create a session and return its token; only the token's hash is stored."""
+    """Create a session and return its token."""
     token = secrets.token_hex(32)
     expires_at = time.time() + expiry_seconds
     conn = _store.conn

@@ -83,11 +83,9 @@ def _build_prompt(
 
     if use_global:
         ctx = global_retrieve(question, store)
-        if not ctx.community_summaries:
-            logger.warning("Global context empty — falling back to local retrieval")
-            return _format_local(local_retrieve(question, store, client), question)
-        return _format_global(ctx, question)
-
+        if ctx.community_summaries:
+            return _format_global(ctx, question)
+        logger.warning("Global context empty — falling back to local retrieval")
     return _format_local(local_retrieve(question, store, client), question)
 
 

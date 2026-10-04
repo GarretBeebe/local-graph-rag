@@ -27,6 +27,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 # relies on: PROJECT_ROOT (and the data/ directory under it) resolves to /app.
 COPY --chown=appuser:appgroup . .
 RUN uv sync --frozen --no-dev
+# UV_COMPILE_BYTECODE only covers site-packages, not the editable project's own source.
+RUN /app/.venv/bin/python -m compileall -q /app/src
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1

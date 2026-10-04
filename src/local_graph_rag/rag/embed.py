@@ -34,15 +34,6 @@ def _prepare_text(text: str) -> str:
     return text
 
 
-def _validate_vector(vector: list[float], model: str = EMBED_MODEL) -> list[float]:
-    if len(vector) != VECTOR_SIZE:
-        raise RuntimeError(
-            f"Embedding model {model!r} returned {len(vector)} dimensions; "
-            f"configured VECTOR_SIZE is {VECTOR_SIZE}"
-        )
-    return vector
-
-
 def embed(text: str) -> list[float]:
     """Return an embedding vector for one text (same endpoint and limits as embed_batch).
 
@@ -76,5 +67,11 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
                 f"Batch embedding returned {len(data['embeddings'])} vectors "
                 f"for {len(batch)} texts"
             )
-        vectors.extend(_validate_vector(vector) for vector in data["embeddings"])
+        for vector in data["embeddings"]:
+            if len(vector) != VECTOR_SIZE:
+                raise RuntimeError(
+                    f"Embedding model {EMBED_MODEL!r} returned {len(vector)} dimensions; "
+                    f"configured VECTOR_SIZE is {VECTOR_SIZE}"
+                )
+        vectors.extend(data["embeddings"])
     return vectors
