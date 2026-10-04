@@ -49,7 +49,7 @@ def embed(text: str) -> list[float]:
 
     response = ollama_client.post_with_retry(
         "/api/embeddings",
-        json={"model": EMBED_MODEL, "prompt": text},
+        json=ollama_client.with_keep_alive({"model": EMBED_MODEL, "prompt": text}),
         timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
     )
 
@@ -72,7 +72,7 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         batch = prepared[start : start + _EMBED_BATCH_SIZE]
         response = ollama_client.post_with_retry(
             "/api/embed",
-            json={"model": EMBED_MODEL, "input": batch},
+            json=ollama_client.with_keep_alive({"model": EMBED_MODEL, "input": batch}),
             timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
         )
 

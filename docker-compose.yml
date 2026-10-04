@@ -55,7 +55,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file: .env
-    environment: *rag-env
+    environment:
+      <<: *rag-env
+      # Keep query models loaded between questions; Ollama unloads after 5m by default and a
+      # cold load costs tens of seconds on CPU. Batch services keep Ollama's default.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
     volumes:
       - graph-data:/app/data
       - ./config:/app/config:ro

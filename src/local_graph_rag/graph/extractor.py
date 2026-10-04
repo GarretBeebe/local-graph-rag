@@ -57,7 +57,9 @@ def _parse_extraction_response(response: str) -> ExtractionResult:
     for candidate in (text, match.group() if match else ""):
         try:
             data = json.loads(candidate)
-        except ValueError:  # json.JSONDecodeError subclasses ValueError
+        # JSONDecodeError subclasses ValueError; absurdly deep nesting raises RecursionError.
+        # Both must degrade to "no result": the raw reply is cached and replayed every run.
+        except (ValueError, RecursionError):
             continue
         return _dict_to_result(data)
 

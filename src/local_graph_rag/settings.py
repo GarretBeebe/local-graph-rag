@@ -34,6 +34,9 @@ OLLAMA_EMBED_TIMEOUT_SECONDS = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_SECOND
 OLLAMA_MAX_RETRIES = int(os.environ.get("OLLAMA_MAX_RETRIES", "2"))
 OLLAMA_RETRY_DELAY_SECONDS = float(os.environ.get("OLLAMA_RETRY_DELAY_SECONDS", "1.0"))
 GENERATION_CONCURRENCY_LIMIT = int(os.environ.get("GENERATION_CONCURRENCY_LIMIT", "1"))
+# How long Ollama keeps a model loaded after this process's last request (e.g. "30m", "-1").
+# Empty: don't send it, so Ollama's own default (5m) applies.
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "")
 
 # Auth and web server
 API_KEY = os.environ.get("API_KEY", "")

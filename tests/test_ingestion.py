@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import sqlite3
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -387,3 +388,42 @@ def test_restoring_an_emptied_file_reindexes_it(
     assert store.get_hash(str(doc.resolve())) == hashlib.sha256(b"").hexdigest()
     doc.write_text(content)
     assert _index_file(doc, store, client) == "indexed"
+
+
+def test_collect_files_marks_unenterable_directories_unscanned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A directory listable but not enterable (read without execute) must not abort the run."""
+    root = tmp_path / "root"
+    locked = root / "locked"
+    locked.mkdir(parents=True)
+    (root / "a.md").write_text("hello")
+    (locked / "b.md").write_text("unreachable")
+    _configure_index_paths(monkeypatch, IndexPath(root))
+    real_check = _idx_mod._is_safe_indexable_file
+
+    def _check(path: Path) -> bool:
+        if path.parent.name == "locked":
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_check(path)
+
+    monkeypatch.setattr(_idx_mod, "_is_safe_indexable_file", _check)
+
+    files, unscanned = _collect_files()
+
+    assert [f.name for f in files] == ["a.md"]
+    assert unscanned == [locked.resolve()]
+
+
+def test_index_file_counts_a_failed_fingerprint_write_as_failed(
+    tmp_path: Path, store: GraphStore, monkeypatch: pytest.MonkeyPatch
+):
+    doc = tmp_path / "empty.md"
+    doc.write_text("")
+
+    def _locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "upsert_hash", _locked)
+
+    assert _index_file(doc, store, _FakeQdrant()) == "failed"

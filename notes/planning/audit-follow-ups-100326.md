@@ -23,12 +23,15 @@ dependency removal. In order:
 2. **Review `.env`.** `api`, `indexer` and `summarizer` now load **every** variable in `.env`
    (`env_file`). Only container wiring is pinned in `docker-compose.yml`: `QDRANT_HOST/PORT/URL`,
    `OLLAMA_BASE_URL`, `SQLITE_PATH`, `INDEX_CONFIG_PATH`.
-   - `TRUSTED_PROXY_IPS` was set but silently ignored before; it now takes effect in the api.
-     - Confirm the container sees Caddy's address as the client peer. Docker Desktop and rootless
-       Docker rewrite source IPs, which makes the setting a silent no-op.
-     - `web/security.py` trusts the **leftmost** `X-Forwarded-For` entry. That is safe only if
-       Caddy overwrites the header, which is its default when `trusted_proxies` is unset. Check
-       your Caddy config.
+   - `TRUSTED_PROXY_IPS`: **checked 2026-10-04, then removed from `.env`.**
+     - Requests through Caddy reach the API from `172.22.0.1`, Docker Desktop's gateway, so Caddy's
+       address (`192.168.68.69`) never matched and the setting never took effect.
+     - Decision: rely on Caddy's per-IP rate limits. The app's limiter stays one global bucket,
+       and the login cookie has no Secure flag behind Caddy.
+     - Trusting the gateway instead would let any LAN device that reaches port 8003 directly
+       spoof its client IP.
+     - If you ever do trust a proxy, `web/security.py` uses the **leftmost** `X-Forwarded-For`
+       entry. That is safe only if the proxy overwrites the header.
    - Variables exported in the shell (`GEN_MODEL=x docker compose up`) no longer reach containers;
      put them in `.env`.
    - An uncommented but empty numeric value (e.g. `CHUNK_SIZE=`) now fails at startup instead of
@@ -122,24 +125,9 @@ PRIORITY 3 — NICE TO FIX (readability, style, minor cleanup)
   default instead of failing (numbers) or passing an empty model name (strings).
 - **`X-Forwarded-For` parsing.** If a proxy that appends to the header is ever used, switch to
   rightmost-untrusted parsing.
-- **Readable-but-unenterable index directories abort the indexer run** (`_walk_index_path` →
-  `_is_safe_indexable_file`). On a directory with read but not execute permission (e.g. mode
-  0754), `os.walk` can list names but `Path.is_symlink()` raises `PermissionError`, which aborts
-  `main()`.
-  - It fails safe: this happens before any stale purge.
-  - It is reachable: `entrypoint.sh` runs the indexer as `appuser` via `runuser`, so bind-mount
-    permissions apply.
-  - It was already true for recursive paths, and non-recursive paths gained it when the walker
-    was unified.
-  - Fix by recording that directory as unscanned, as `_on_walk_error` does. Do **not** return
-    False: that would make its indexed files look deleted.
-- **Deeply nested replies raise `RecursionError`.** `_parse_extraction_response` catches
-  `ValueError` only, so a reply nested ~1,000 levels raises `RecursionError` on Python 3.11. The
-  raw reply is cached first, so every run replays it and the file is never fingerprinted. Catch
-  `(ValueError, RecursionError)`.
-- **Unguarded fingerprint write for empty files.** The `upsert_hash` in `_index_file`'s no-chunks
-  branch isn't guarded, so a SQLite "database is locked" after the 30 s busy timeout aborts the
-  whole run instead of counting one failure. The existing `get_hash` call has the same exposure.
+- **Unguarded fingerprint read.** The `get_hash` call at the top of `_index_file` isn't guarded,
+  so a SQLite "database is locked" after the 30 s busy timeout aborts the whole run instead of
+  counting one failure. The matching write for empty files is guarded as of 2026-10-04.
 - **`SqliteStore.close()` racing a thread's first connection** (read from the code, not
   reproduced). A thread opening its connection while another thread runs `close()` can cache a
   closed connection. API shutdown stops the executor before `close()`, which limits the exposure.

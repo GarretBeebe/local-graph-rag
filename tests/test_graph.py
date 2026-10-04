@@ -667,6 +667,12 @@ def test_parse_valid_json_with_none_word_in_string_untouched():
     assert result.entities[0]["description"] == "Returns None if not found"
 
 
+def test_parse_survives_pathologically_nested_json():
+    """RecursionError must degrade to an empty result: raw replies are cached and replayed."""
+    for response in ("[" * 100_000 + "]" * 100_000, '{"a":' * 100_000 + "1" + "}" * 100_000):
+        assert _parse_extraction_response(response) == ExtractionResult()
+
+
 def test_parse_non_dict_top_level_returns_empty():
     for response in ("null", "[1, 2, 3]"):
         result = _parse_extraction_response(response)

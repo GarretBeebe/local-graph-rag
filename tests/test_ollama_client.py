@@ -95,3 +95,40 @@ def test_embed_batch_splits_large_inputs_into_bounded_requests(monkeypatch: pyte
 
     assert request_sizes == [64, 64, 2]
     assert len(vectors) == 130
+
+
+def test_keep_alive_is_sent_when_configured_but_not_in_the_cache_keyed_payload(
+    fake_session, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(ollama_client, "OLLAMA_KEEP_ALIVE", "30m")
+    session = fake_session(_FakeResponse({"response": "hi"}))
+
+    ollama_client.generate("prompt", "model-x")
+
+    assert session.calls[0]["json"]["keep_alive"] == "30m"
+    # The extraction cache hashes this payload; keep-alive must not change the key.
+    assert "keep_alive" not in ollama_client.build_generate_payload("model-x", "p", stream=False)
+
+
+def test_keep_alive_is_omitted_by_default(fake_session, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ollama_client, "OLLAMA_KEEP_ALIVE", "")
+    session = fake_session(_FakeResponse({"response": "hi"}))
+
+    ollama_client.generate("prompt", "model-x")
+
+    assert "keep_alive" not in session.calls[0]["json"]
+
+
+def test_embed_batch_sends_keep_alive_when_configured(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ollama_client, "OLLAMA_KEEP_ALIVE", "30m")
+    sent: list[dict] = []
+
+    def _fake_post(path: str, **kwargs) -> _FakeResponse:
+        sent.append(kwargs["json"])
+        return _FakeResponse({"embeddings": [[0.0] * embed_mod.VECTOR_SIZE]})
+
+    monkeypatch.setattr(embed_mod.ollama_client, "post_with_retry", _fake_post)
+
+    embed_mod.embed_batch(["text"])
+
+    assert sent[0]["keep_alive"] == "30m"

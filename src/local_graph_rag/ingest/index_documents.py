@@ -322,7 +322,11 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
             return "failed"
         # Mark the empty content as processed so it isn't re-read every run; restoring the
         # old content changes the hash again, so it gets re-indexed.
-        store.upsert_hash(filepath, current_hash)
+        try:
+            store.upsert_hash(filepath, current_hash)
+        except Exception as e:
+            logger.error("Recording fingerprint failed for %s: %s", path, e)
+            return "failed"
         return "skipped"
     chunks = [c for c, _ in chunked]
 
@@ -360,21 +364,24 @@ def _walk_index_path(ip: IndexPath, ignore: list[str], unscanned: list[Path]) ->
     if not ip.path.is_dir():
         return []
 
-    def _on_walk_error(error: OSError) -> None:
-        logger.warning("Cannot list %s: %s", error.filename, error)
-        unscanned.append(Path(normalize_path(error.filename)))
+    def _mark_unscanned(path: str, error: OSError) -> None:
+        logger.warning("Cannot scan %s: %s", path, error)
+        unscanned.append(Path(normalize_path(path)))
 
     files: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(ip.path, topdown=True, onerror=_on_walk_error):
+    for dirpath, dirnames, filenames in os.walk(
+        ip.path, topdown=True, onerror=lambda error: _mark_unscanned(error.filename, error)
+    ):
         # Emptying dirnames stops a non-recursive index path at its own directory.
         dirnames[:] = [
             d for d in dirnames
             if ip.recursive and d not in ip.exclude_dirs and not matches_ignore_pattern(d, ignore)
         ]
-        for fname in filenames:
-            fpath = Path(dirpath) / fname
-            if _accept(fpath, ignore):
-                files.append(fpath)
+        try:
+            files.extend([p for p in (Path(dirpath) / f for f in filenames) if _accept(p, ignore)])
+        except OSError as error:
+            # Readable but not enterable: names are listed, but the files can't be inspected.
+            _mark_unscanned(dirpath, error)
     return files
 
 

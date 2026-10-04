@@ -16,6 +16,7 @@ from local_graph_rag.settings import (
     GENERATION_CONCURRENCY_LIMIT,
     OLLAMA_BASE_URL,
     OLLAMA_GENERATE_TIMEOUT_SECONDS,
+    OLLAMA_KEEP_ALIVE,
     OLLAMA_MAX_RETRIES,
     OLLAMA_NUM_CTX,
     OLLAMA_RETRY_DELAY_SECONDS,
@@ -112,6 +113,15 @@ def build_generate_payload(
     return payload
 
 
+def with_keep_alive(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add OLLAMA_KEEP_ALIVE to a request body when configured.
+
+    Applied at send time rather than in build_generate_payload, whose output keys the
+    extraction cache: residency is not part of what a response means.
+    """
+    return {**payload, "keep_alive": OLLAMA_KEEP_ALIVE} if OLLAMA_KEEP_ALIVE else payload
+
+
 def _log_timings(model: str, data: dict[str, Any]) -> None:
     """Log where a request's time went; a nonzero load means the model was cold-loaded."""
     logger.info(
@@ -160,7 +170,9 @@ def generate(
     """Return a complete generated response from Ollama."""
     payload = build_generate_payload(model, prompt, stream=False, format=format, options=options)
     with _generation_slot(cancel=cancel, timeout=timeout):
-        r = post_with_retry("/api/generate", cancel=cancel, json=payload, timeout=timeout)
+        r = post_with_retry(
+            "/api/generate", cancel=cancel, json=with_keep_alive(payload), timeout=timeout
+        )
     try:
         data = r.json()
     except ValueError as e:
@@ -182,7 +194,7 @@ def stream_generate(
         _generation_slot(cancel=cancel, timeout=timeout),
         _get_session().post(
             _url("/api/generate"),
-            json=build_generate_payload(model, prompt, stream=True),
+            json=with_keep_alive(build_generate_payload(model, prompt, stream=True)),
             stream=True,
             timeout=timeout,
         ) as resp,
