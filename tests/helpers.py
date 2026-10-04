@@ -5,6 +5,8 @@ from typing import Any
 
 from pytest import MonkeyPatch
 
+from local_graph_rag.graph.store import GraphStore
+
 ZERO_VECTOR_768 = [0.0] * 768
 LOCAL_EMBED_TARGET = "local_graph_rag.rag.local_retrieval.embed"
 GLOBAL_EMBED_TARGET = "local_graph_rag.rag.global_retrieval.embed"
@@ -37,6 +39,24 @@ def patch_ollama_generate(monkeypatch: MonkeyPatch, fn: Callable[..., str]) -> N
 
 def patch_router_generate(monkeypatch: MonkeyPatch, fn: Callable[..., str]) -> None:
     monkeypatch.setattr(ROUTER_GENERATE_TARGET, fn)
+
+
+def add_entity(
+    store: GraphStore,
+    name: str,
+    *,
+    type: str | None = None,
+    description: str | None = None,
+    doc: str = "doc.py",
+) -> str:
+    """Record one entity mention from `doc` and return its slug id."""
+    return store.upsert_entities([{"name": name, "type": type, "description": description}], doc)[0]
+
+
+def add_relationship(
+    store: GraphStore, source: str, target: str, label: str, doc: str = "doc.py"
+) -> None:
+    store.upsert_relationships([(source, target, label, doc)])
 
 
 def bearer_headers(token: str) -> dict[str, str]:

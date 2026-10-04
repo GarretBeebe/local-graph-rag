@@ -2,7 +2,7 @@
 
 import pytest
 
-from local_graph_rag.rag.query_router import _heuristic, route_query
+from local_graph_rag.rag.query_router import _ROUTER_TIMEOUT_SECONDS, _heuristic, route_query
 from tests.helpers import patch_router_generate
 
 
@@ -47,6 +47,28 @@ def test_route_falls_back_to_heuristic_on_unexpected_response(monkeypatch):
     # "themes" → heuristic returns global
     result = route_query("what are the themes here?", communities_available=True)
     assert result == "global"
+
+
+def test_route_makes_a_deterministic_bounded_llm_call(monkeypatch):
+    captured: dict = {}
+
+    def _record(*args, **kwargs):
+        captured.update(kwargs)
+        return "local"
+
+    patch_router_generate(monkeypatch, _record)
+    route_query("what does GraphStore do?", communities_available=True)
+
+    assert captured["options"]["temperature"] == 0
+    assert captured["options"]["num_predict"] <= 5
+    assert captured["timeout"] == _ROUTER_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("reply", ["Global.", " global\n\nIt asks about themes.", "'global'"])
+def test_route_reads_the_first_word_of_the_llm_reply(monkeypatch, reply: str):
+    patch_router_generate(monkeypatch, lambda *a, **kw: reply)
+    # The heuristic alone would say "local" here, so "global" proves the reply was parsed.
+    assert route_query("what does GraphStore do?", communities_available=True) == "global"
 
 
 @pytest.mark.parametrize("question,expected", [

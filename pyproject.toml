@@ -9,7 +9,6 @@ requires-python = ">=3.11"
 dependencies = [
     "qdrant-client",
     "networkx",
-    "python-louvain",
     "pyyaml",
     "tqdm",
     "requests",

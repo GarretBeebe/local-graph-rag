@@ -1,5 +1,6 @@
 """LLM-based entity and relationship extraction from document chunks."""
 
+import hashlib
 import json
 import logging
 import re
@@ -28,76 +29,35 @@ Text:
 {text}"""
 
 
+# Deterministic decoding: repeatable extractions, and cached results mean what they say.
+_EXTRACT_OPTIONS = {"temperature": 0}
+
+
 @dataclass
 class ExtractionResult:
     entities: list[dict] = field(default_factory=list)
     relationships: list[dict] = field(default_factory=list)
     had_failure: bool = False
+    # Relationships the LLM returned, before dropping ones whose source or target was not
+    # also extracted as an entity — the gap is a measure of graph sparsity.
+    relationships_extracted: int = 0
 
 
 def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def _none_to_null(text: str) -> str:
-    """Replace bareword Python `None` with JSON `null` in clear value positions only.
-
-    Only matches `None` immediately after `:`, `,`, or `[` and immediately before
-    `,`, `}`, or `]` — i.e. where JSON requires a value, not inside string content.
-    Residual risk: a string containing literal ", None," at a value-boundary could
-    still be rewritten. Accepted because this only fires on already-invalid JSON as
-    last-resort recovery (stale-cache-replay only — see _candidates).
-    """
-    return re.sub(r"([:,\[]\s*)None(?=\s*[,}\]])", r"\1null", text)
-
-
-def _candidates(text: str) -> list[str]:
-    """Generate candidate JSON strings to try, in order of preference.
-
-    Candidates 2 and 4/5 below exist only to recover stale cached responses that
-    predate `format="json"` — fresh grammar-constrained output shouldn't need them
-    and they can be removed once such caches are no longer relevant.
-    """
-    out = [text]
-
-    # Candidate 2: model emitted '{}' followed by the real JSON on the next line.
-    if text.startswith("{}"):
-        remainder = text[2:].lstrip()
-        if remainder:
-            out.append(remainder)
-            # Candidate 2b: same, with None -> null substitution on the remainder.
-            fixed_remainder = _none_to_null(remainder)
-            if fixed_remainder != remainder:
-                out.append(fixed_remainder)
-
-    # Candidate 3: extract first {...} block (handles leading/trailing prose).
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    block = match.group() if match else None
-    if block is not None and block != text:
-        out.append(block)
-
-    # Candidate 4: substitute None -> null on the full text.
-    fixed_text = _none_to_null(text)
-    if fixed_text != text:
-        out.append(fixed_text)
-
-    # Candidate 5: substitute None -> null on the isolated {...} block (if any).
-    if block is not None and block != text:
-        fixed_block = _none_to_null(block)
-        if fixed_block != block:
-            out.append(fixed_block)
-
-    return out
-
-
 def _parse_extraction_response(response: str) -> ExtractionResult:
-    """Parse LLM output into an ExtractionResult. Falls back gracefully on bad JSON."""
-    text = response.strip()
+    """Parse LLM output into an ExtractionResult. Falls back gracefully on bad JSON.
 
-    for candidate in _candidates(text):
+    Tries the whole text, then its outermost {...} block (leading/trailing prose).
+    """
+    text = response.strip()
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    for candidate in (text, match.group() if match else ""):
         try:
             data = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:  # json.JSONDecodeError subclasses ValueError
             continue
         return _dict_to_result(data)
 
@@ -120,6 +80,15 @@ def _dict_to_result(data: object) -> ExtractionResult:
     )
 
 
+def _text(value: object) -> str:
+    """Return a stripped string field, or "" when the LLM returned another type.
+
+    Raw replies are cached and replayed, so a malformed field must degrade to "missing"
+    rather than raise on every run.
+    """
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _normalize_entities(entities: list[dict]) -> tuple[list[dict], set[str]]:
     """Strip whitespace, filter empty names, deduplicate by slug (keep longest description).
 
@@ -127,27 +96,19 @@ def _normalize_entities(entities: list[dict]) -> tuple[list[dict], set[str]]:
     """
     by_slug: dict[str, dict] = {}
     for entity in entities:
-        name = (entity.get("name") or "").strip()
-        if not name:
-            continue
+        name = _text(entity.get("name"))
         slug = slugify(name)
         if not slug:
             continue
+        entity_type = _text(entity.get("type")) or None
+        description = _text(entity.get("description"))
         existing = by_slug.get(slug)
         if existing is None:
-            by_slug[slug] = {
-                "name": name,
-                "type": entity.get("type"),
-                "description": entity.get("description", ""),
-            }
+            by_slug[slug] = {"name": name, "type": entity_type, "description": description}
         else:
-            by_slug[slug]["description"] = max(
-                str(existing.get("description") or ""),
-                str(entity.get("description") or ""),
-                key=len,
-            )
-            if existing.get("type") is None and entity.get("type"):
-                by_slug[slug]["type"] = entity["type"]
+            existing["description"] = max(existing["description"], description, key=len)
+            if existing["type"] is None:
+                existing["type"] = entity_type
     return list(by_slug.values()), set(by_slug.keys())
 
 
@@ -155,9 +116,7 @@ def _normalize_relationships(relationships: list[dict], valid_slugs: set[str]) -
     """Filter relationships to those whose endpoints exist in valid_slugs."""
     result = []
     for rel in relationships:
-        source = (rel.get("source") or "").strip()
-        target = (rel.get("target") or "").strip()
-        label = (rel.get("label") or "").strip()
+        source, target, label = (_text(rel.get(key)) for key in ("source", "target", "label"))
         if not (source and target and label):
             continue
         if slugify(source) not in valid_slugs or slugify(target) not in valid_slugs:
@@ -187,16 +146,24 @@ def _load_or_extract_batch(
     batch_text: str,
     batch_index: int,
     filepath: str,
-    cached: dict[int, str],
     store: GraphStore,
 ) -> ExtractionResult:
-    if batch_index in cached:
-        logger.debug("extraction cache hit for %s batch %d", filepath, batch_index)
-        return _parse_extraction_response(cached[batch_index])
-
     prompt = _PROMPT_TEMPLATE.format(text=batch_text)
-    response = ollama_client.generate(prompt, EXTRACT_MODEL, format="json")
-    store.cache_extraction(filepath, batch_index, response)
+    # Key the cache on the exact request body, so edited text, a new model, prompt, or
+    # option all miss instead of replaying a result computed for something else.
+    payload = ollama_client.build_generate_payload(
+        EXTRACT_MODEL, prompt, stream=False, format="json", options=_EXTRACT_OPTIONS
+    )
+    prompt_sha256 = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    cached = store.get_cached_extraction(filepath, batch_index, prompt_sha256)
+    if cached is not None:
+        logger.debug("extraction cache hit for %s batch %d", filepath, batch_index)
+        return _parse_extraction_response(cached)
+
+    response = ollama_client.generate(
+        prompt, EXTRACT_MODEL, format="json", options=_EXTRACT_OPTIONS
+    )
+    store.cache_extraction(filepath, batch_index, prompt_sha256, response)
     return _parse_extraction_response(response)
 
 
@@ -211,6 +178,7 @@ def _normalize_extraction_result(
         entities=normalized_entities,
         relationships=_normalize_relationships(relationships, valid_slugs),
         had_failure=had_failure,
+        relationships_extracted=len(relationships),
     )
 
 
@@ -221,21 +189,20 @@ def extract_entities_for_file(
 ) -> ExtractionResult:
     """Extract entities and relationships from all chunks of a file.
 
-    Batches chunks to stay within EXTRACT_BATCH_TOKENS. Caches each batch result in
-    the store so interrupted runs resume without redundant LLM calls.
+    Batches chunks to stay within EXTRACT_BATCH_TOKENS. Caches each batch result keyed by
+    its exact request, so interrupted runs and unchanged batches skip redundant LLM calls.
     """
     if not chunks:
         return ExtractionResult()
 
     batches = _build_batches(chunks)
-    cached = store.get_cached_extractions(filepath)
     all_entities: list[dict] = []
     all_relationships: list[dict] = []
     any_failure = False
 
     for i, batch_text in enumerate(batches):
         try:
-            result = _load_or_extract_batch(batch_text, i, filepath, cached, store)
+            result = _load_or_extract_batch(batch_text, i, filepath, store)
         except Exception:
             logger.exception(
                 "Extraction failed for %s batch %d; treating as empty", filepath, i

@@ -66,15 +66,26 @@ Ingestion is safe to interrupt and guarantees consistent state across restarts:
   all Qdrant and graph writes complete. A crashed run leaves no fingerprint, so the file is
   retried on the next run. Files that completed are skipped via hash comparison.
 
-- **Cleanup ordering.** When re-indexing a changed file, vectors are deleted from Qdrant
-  *before* removing chunk records from SQLite. If Qdrant is unreachable, the SQLite chunk IDs
-  survive and the next run can retry the Qdrant delete. When writing new vectors, chunk IDs are
-  registered in SQLite *before* upserting to Qdrant, so any Qdrant failure leaves behind
-  deletable IDs for the next run.
+- **Cleanup ordering.** A changed file is chunked and embedded *before* its old version is
+  removed, so an Ollama outage leaves the previous version searchable. Vectors are then deleted
+  from Qdrant *before* removing chunk records from SQLite. If Qdrant is unreachable, the SQLite
+  chunk IDs survive and the next run can retry the Qdrant delete. When writing new vectors,
+  chunk IDs are registered in SQLite *before* upserting to Qdrant, so any Qdrant failure leaves
+  behind deletable IDs for the next run.
+
+- **Extraction cache.** Each LLM extraction batch is cached under a hash of its exact request
+  (model, prompt, text, options). Unchanged batches of an edited file are reused; anything that
+  changed — text, `EXTRACT_MODEL`, prompt — is re-extracted rather than replayed.
 
 - **Stale file cleanup.** At startup, the pipeline compares tracked paths against files on disk
   and removes data for any files that were deleted — vectors from Qdrant, entities and
-  relationships from SQLite, and the fingerprint record.
+  relationships from SQLite, the fingerprint, and cached extractions. Index paths that are
+  missing, empty, or unreadable (e.g. an offline network share) are skipped with a warning
+  instead: their files keep their index entries until the path can be scanned again.
+
+- **Entity provenance.** Entity descriptions and types are derived from the documents that
+  currently mention each entity, so editing or deleting a document retracts what it
+  contributed.
 
 ---
 
@@ -83,8 +94,8 @@ Ingestion is safe to interrupt and guarantees consistent state across restarts:
 | Concern | Choice |
 |---|---|
 | Vector store | Qdrant |
-| Graph store | NetworkX (in-memory) + SQLite (persistence) |
-| Community detection | Louvain (`python-louvain`) |
+| Graph store | SQLite (storage + indexed traversal); NetworkX for community detection |
+| Community detection | Louvain (NetworkX, fixed seed) |
 | LLM / embeddings | Ollama |
 | Web framework | FastAPI |
 | Package manager | uv |
@@ -121,8 +132,9 @@ docker compose --profile summarizer run --rm summarizer
 docker compose --profile summarizer run --rm summarizer graph-rag-summarize --force
 ```
 
-The summarizer is idempotent: it skips communities whose membership hasn't changed since the
-last run (tracked by a SHA-256 member hash). Run it after any indexer run that adds new
+The summarizer is idempotent: community detection is seeded, and a community whose members,
+descriptions, and relationships are unchanged reuses its existing summary (matched by SHA-256
+member hash even if its community id changed). Run it after any indexer run that adds new
 documents.
 
 ### Running the web server
@@ -243,6 +255,7 @@ local-graph-rag/
 │   ├── test_retrieval.py         # Local + global retrieval unit tests
 │   ├── test_query_router.py      # Local/global routing unit tests
 │   ├── test_query_graph_rag.py   # End-to-end query module tests
+│   ├── test_ollama_client.py     # Ollama retry/timing + batch embedding tests
 │   ├── test_api_server.py        # API server auth + endpoint tests
 │   └── test_index_security.py    # Ingestion security (path traversal, size limits)
 ├── notes/

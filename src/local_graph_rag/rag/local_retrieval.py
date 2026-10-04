@@ -38,10 +38,12 @@ def _extract_identifiers(question: str) -> list[str]:
     return [t for t in _IDENTIFIER_RE.findall(question) if "_" in t or _CAMEL_RE.search(t)]
 
 
-def _lookup_by_def_names(client: QdrantClient, def_names: list[str]) -> dict[str, list[str]]:
+def _lookup_by_def_names(
+    client: QdrantClient, def_names: list[str]
+) -> dict[str, list[tuple[str, str]]]:
     """Batch exact-match chunks whose def_name payload is in def_names.
 
-    Returns {def_name: [chunk_text, ...]}, each list ordered by chunk_index —
+    Returns {def_name: [(chunk_id, chunk_text), ...]}, each list ordered by chunk_index —
     recovers original order for an oversized def split into multiple chunks.
     """
     if not def_names:
@@ -56,16 +58,16 @@ def _lookup_by_def_names(client: QdrantClient, def_names: list[str]) -> dict[str
         with_payload=True,
     )
 
-    by_def: dict[str, list[tuple[int, str]]] = {}
+    by_def: dict[str, list[tuple[int, str, str]]] = {}
     for p in points:
         if not p.payload or "text" not in p.payload or "def_name" not in p.payload:
             continue
         by_def.setdefault(p.payload["def_name"], []).append(
-            (p.payload.get("chunk_index", 0), p.payload["text"])
+            (p.payload.get("chunk_index", 0), str(p.id), p.payload["text"])
         )
 
     return {
-        name: [text for _, text in sorted(pieces, key=lambda t: t[0])]
+        name: [(chunk_id, text) for _, chunk_id, text in sorted(pieces, key=lambda t: t[0])]
         for name, pieces in by_def.items()
     }
 
@@ -94,31 +96,24 @@ def local_retrieve(
         :_MAX_IDENTIFIER_LOOKUPS
     ]
     matches_by_def = _lookup_by_def_names(client, deduped_identifiers)
+    def_chunk_ids: list[str] = []
     for ident in deduped_identifiers:
-        for text in matches_by_def.get(ident, []):
+        for chunk_id, text in matches_by_def.get(ident, []):
+            def_chunk_ids.append(chunk_id)
             if text not in seen_texts:
                 chunk_texts.append(text)
                 seen_texts.add(text)
 
-    entity_ids = store.get_entities_by_chunk_ids(chunk_ids)
-    neighborhoods = store.get_entity_neighborhoods(entity_ids, hops)
-
-    seen_entities: dict[str, dict] = {}
-    seen_rels: dict[tuple[str, str, str], dict] = {}
-    for neighborhood in neighborhoods.values():
-        for e in neighborhood["entities"]:
-            seen_entities.setdefault(e["id"], e)
-        for r in neighborhood["relationships"]:
-            key = (r["source_id"], r["target_id"], r["label"])
-            seen_rels.setdefault(key, r)
-
-    entities = list(seen_entities.values())[:_MAX_ENTITIES]
-    relationships = list(seen_rels.values())[:_MAX_RELATIONSHIPS]
+    # Exact identifier matches are the most precise seeds, then vector hits in rank order.
+    seed_ids = store.get_entities_by_chunk_ids(def_chunk_ids + chunk_ids)
+    entities, relationships = store.expand_neighborhood(
+        seed_ids, hops, max_entities=_MAX_ENTITIES, max_relationships=_MAX_RELATIONSHIPS
+    )
 
     logger.debug(
-        "local_retrieve: %d chunks → %d entities → %d neighborhood entities, %d rels",
-        len(chunk_ids),
-        len(entity_ids),
+        "local_retrieve: %d chunks → %d seed entities → %d entities, %d rels",
+        len(chunk_ids) + len(def_chunk_ids),
+        len(seed_ids),
         len(entities),
         len(relationships),
     )

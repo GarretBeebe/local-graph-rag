@@ -40,3 +40,10 @@ def test_insecure_localonly_with_specific_cors_origin_is_accepted(monkeypatch: p
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:3000")
     reloaded = importlib.reload(settings)
     assert reloaded.CORS_ORIGINS == ["http://localhost:3000"]
+
+
+def test_executor_workers_must_exceed_generation_concurrency(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GENERATION_CONCURRENCY_LIMIT", "2")
+    monkeypatch.setenv("RAG_EXECUTOR_WORKERS", "2")
+    with pytest.raises(ValueError, match="RAG_EXECUTOR_WORKERS must be > GENERATION_CONCURRENCY"):
+        importlib.reload(settings)

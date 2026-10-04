@@ -38,15 +38,10 @@ _client: QdrantClient | None = None
 def init_rag_executor(workers: int, concurrency_limit: int) -> None:
     global _RAG_EXECUTOR, _RAG_CONCURRENCY
     _RAG_EXECUTOR = ThreadPoolExecutor(max_workers=workers)
-    effective = concurrency_limit
-    if effective > 1:
-        logger.warning(
-            "GENERATION_CONCURRENCY_LIMIT=%d: GraphStore uses a shared SQLite connection "
-            "unsafe for concurrent access; clamping to 1 until GraphStore is thread-hardened.",
-            effective,
-        )
-        effective = 1
-    _RAG_CONCURRENCY = asyncio.Semaphore(effective)
+    # Pipeline concurrency tracks generation capacity, so excess requests queue here (long
+    # capacity wait, explicit 504) instead of inside Ollama's generation slot, whose shorter
+    # wait would turn ordinary queueing into stream timeouts on CPU-bound hardware.
+    _RAG_CONCURRENCY = asyncio.Semaphore(concurrency_limit)
 
 
 def init_stores(store: GraphStore, client: QdrantClient) -> None:

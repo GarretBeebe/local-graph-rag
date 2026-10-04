@@ -44,6 +44,11 @@ Answer:"""
 
 _WORD_RE = re.compile(r"[a-z]+")
 
+# Classification needs one deterministic word, and routing is only an optimization: fail
+# fast to the keyword heuristic rather than hold up the answer.
+_ROUTER_OPTIONS = {"temperature": 0, "num_predict": 5}
+_ROUTER_TIMEOUT_SECONDS = 10.0
+
 # A "name.ext" for one of the indexed extensions (config/index_config.yaml) names a
 # specific file — "summarize foo.md" is local even though "summarize" is a global
 # keyword on its own.
@@ -69,11 +74,17 @@ def route_query(
 
     try:
         response = ollama_client.generate(
-            _ROUTER_PROMPT.format(question=question), EXTRACT_MODEL, cancel=cancel
-        ).strip().lower()
-        if response in ("local", "global"):
-            logger.debug("route_query: LLM classified %r → %r", question[:60], response)
-            return response  # type: ignore[return-value]
+            _ROUTER_PROMPT.format(question=question),
+            EXTRACT_MODEL,
+            timeout=_ROUTER_TIMEOUT_SECONDS,
+            cancel=cancel,
+            options=_ROUTER_OPTIONS,
+        )
+        words = response.strip().lower().split()
+        answer = words[0].strip(".,:;!\"'`") if words else ""
+        if answer in ("local", "global"):
+            logger.debug("route_query: LLM classified %r → %r", question[:60], answer)
+            return answer  # type: ignore[return-value]
         logger.warning("route_query: unexpected LLM response %r — using heuristic", response)
     except Exception as e:
         logger.warning("route_query: LLM failed (%s) — using heuristic", e)

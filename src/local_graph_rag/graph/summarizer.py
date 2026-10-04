@@ -69,10 +69,23 @@ def _build_summary_prompt(entities: list[dict], relationships: list[dict]) -> st
     )
 
 
-def summarize_community(community_id: int, store: GraphStore, *, force: bool = False) -> bool:
-    """Summarize one community. Returns True if generated, False if skipped.
+def _summaries_by_hash(store: GraphStore) -> dict[str, dict]:
+    return {c["member_hash"]: c for c in store.get_communities() if c["member_hash"]}
 
-    Skips when the stored member_hash matches current membership, unless force=True.
+
+def summarize_community(
+    community_id: int,
+    store: GraphStore,
+    *,
+    previous: dict[str, dict] | None = None,
+    force: bool = False,
+) -> bool:
+    """Summarize one community. Returns True if generated, False if skipped or reused.
+
+    Skips the LLM when a stored community has the same member_hash under any id —
+    `previous` maps member_hash to community row (read from the store when omitted) — and
+    copies that summary to this id if Louvain renumbered the community. force=True always
+    regenerates.
     """
     entities = store.get_entities_for_community(community_id)
     if not entities:
@@ -84,9 +97,15 @@ def summarize_community(community_id: int, store: GraphStore, *, force: bool = F
     new_hash = _compute_member_hash(entities, relationships)
 
     if not force:
-        existing_row = store.get_community(community_id)
-        if existing_row and existing_row["member_hash"] == new_hash:
-            logger.debug("Community %d unchanged — skipping", community_id)
+        if previous is None:
+            previous = _summaries_by_hash(store)
+        prior = previous.get(new_hash)
+        if prior is not None:
+            if prior["id"] != community_id:
+                store.upsert_community(
+                    community_id, prior["summary"], entity_ids, new_hash, prior["embedding"]
+                )
+            logger.debug("Community %d unchanged — reusing summary", community_id)
             return False
 
     prompt = _build_summary_prompt(entities, relationships)
@@ -117,26 +136,32 @@ def summarize_community(community_id: int, store: GraphStore, *, force: bool = F
 def summarize_all_communities(
     store: GraphStore, *, force: bool = False
 ) -> dict[str, int]:
-    """Run Louvain detection, clean stale communities, then summarize all.
+    """Run Louvain detection, summarize every community, then drop stale summary rows.
+
+    Existing summaries are matched by member_hash across community ids, so a renumbered but
+    unchanged community is reused instead of re-summarized. Stale rows are deleted last so
+    current summaries keep serving global retrieval during a long run.
 
     Returns counts: {summarized, skipped, failed}.
     """
+    previous = None if force else _summaries_by_hash(store)
     store.detect_communities()
 
     active_ids = store.get_active_community_ids()
     logger.info("Detected %d active communities", len(active_ids))
 
-    store.delete_stale_communities()
-
     counts: dict[str, int] = {"summarized": 0, "skipped": 0, "failed": 0}
     for community_id in sorted(active_ids):
         try:
-            generated = summarize_community(community_id, store, force=force)
+            generated = summarize_community(
+                community_id, store, previous=previous, force=force
+            )
             counts["summarized" if generated else "skipped"] += 1
         except Exception:
             logger.exception("Failed to summarize community %d", community_id)
             counts["failed"] += 1
 
+    store.delete_stale_communities()
     return counts
 
 

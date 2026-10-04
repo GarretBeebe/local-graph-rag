@@ -1,47 +1,35 @@
-"""NetworkX graph and community-summary store methods."""
+"""Graph traversal, community detection, and community-summary store methods."""
 
 import json
 import logging
-import sqlite3
-from typing import Any
+from itertools import zip_longest
 
 import networkx as nx
 
-try:
-    import community as community_louvain
-except ImportError:
-    community_louvain = None  # type: ignore[assignment]
-
-from local_graph_rag.settings import ENTITY_NEIGHBORHOOD_HOPS
-
 logger = logging.getLogger(__name__)
 
-_COMMUNITY_FIELDS = "id, summary, entity_ids, member_hash, embedding"
 _ACTIVE_COMMUNITY_IDS_SQL = "SELECT DISTINCT community FROM entities WHERE community IS NOT NULL"
+# Fixed so an unchanged graph always yields the same partition and community ids.
+_LOUVAIN_SEED = 42
 
 
 class CommunityStoreMixin:
-    def build_networkx_graph(self) -> nx.DiGraph:
-        """Load all relationships into an in-memory DiGraph."""
-        graph: nx.DiGraph = nx.DiGraph()
-        rows = self._conn.execute(
-            "SELECT source_id, target_id, label, weight FROM relationships"
+    def build_networkx_graph(self) -> nx.Graph:
+        """Load relationships as an undirected graph with one edge per entity pair.
+
+        Edge weight is the sum across labels, directions, and source documents. Rows are
+        added in a fixed order because the seeded Louvain partition depends on it.
+        """
+        rows = self.conn.execute(
+            "SELECT MIN(source_id, target_id) AS a, MAX(source_id, target_id) AS b, "
+            "SUM(weight) AS weight FROM relationships GROUP BY a, b ORDER BY a, b"
         ).fetchall()
-        for row in rows:
-            graph.add_edge(
-                row["source_id"],
-                row["target_id"],
-                label=row["label"],
-                weight=row["weight"],
-            )
+        graph = nx.Graph()
+        graph.add_weighted_edges_from((row["a"], row["b"], row["weight"]) for row in rows)
         return graph
 
     def detect_communities(self) -> None:
-        """Run Louvain community detection and write community IDs back to entities."""
-        if community_louvain is None:
-            raise RuntimeError(
-                "python-louvain is not installed; run `uv add python-louvain`"
-            )
+        """Run seeded Louvain community detection and write community IDs back to entities."""
         graph = self.build_networkx_graph()
         partition: dict[str, int] = {}
         if len(graph.nodes) == 0:
@@ -49,12 +37,19 @@ class CommunityStoreMixin:
                 "detect_communities: graph is empty — clearing all community assignments"
             )
         else:
-            partition = community_louvain.best_partition(graph.to_undirected())
+            communities = nx.community.louvain_communities(
+                graph, weight="weight", seed=_LOUVAIN_SEED
+            )
+            partition = {
+                entity_id: community_id
+                for community_id, members in enumerate(sorted(communities, key=min))
+                for entity_id in members
+            }
 
         with self._write():
-            self._conn.execute("UPDATE entities SET community = NULL")
+            self.conn.execute("UPDATE entities SET community = NULL")
             if partition:
-                self._conn.executemany(
+                self.conn.executemany(
                     "UPDATE entities SET community = ? WHERE id = ?",
                     [(comm_id, entity_id) for entity_id, comm_id in partition.items()],
                 )
@@ -66,71 +61,101 @@ class CommunityStoreMixin:
                 len(set(partition.values())),
             )
 
-    def get_entity_neighborhood(
+    def expand_neighborhood(
         self,
-        entity_id: str,
-        hops: int = ENTITY_NEIGHBORHOOD_HOPS,
+        seed_ids: list[str],
+        hops: int,
         *,
-        graph: nx.DiGraph | None = None,
-    ) -> dict[str, Any]:
-        """Return entity rows and relationship rows within `hops` of entity_id."""
-        if graph is None:
-            graph = self.build_networkx_graph()
-        if entity_id not in graph:
-            row = self._conn.execute(
-                "SELECT id, name, type, description, community FROM entities WHERE id = ?",
-                (entity_id,),
-            ).fetchone()
-            if row is None:
-                return {"entities": [], "relationships": []}
-            return {"entities": [dict(row)], "relationships": []}
-        subgraph = nx.ego_graph(graph, entity_id, radius=hops, undirected=True)
-        node_ids = list(subgraph.nodes)
-        placeholders = ",".join("?" * len(node_ids))
-        entity_rows = self._conn.execute(
-            f"SELECT id, name, type, description, community FROM entities "
-            f"WHERE id IN ({placeholders})",
-            node_ids,
-        ).fetchall()
-        rel_rows = self._conn.execute(
-            f"SELECT source_id, target_id, label, weight FROM relationships "
-            f"WHERE source_id IN ({placeholders}) AND target_id IN ({placeholders})",
-            node_ids + node_ids,
-        ).fetchall()
-        return {
-            "entities": [dict(row) for row in entity_rows],
-            "relationships": [dict(row) for row in rel_rows],
-        }
+        max_entities: int,
+        max_relationships: int,
+    ) -> tuple[list[dict], list[dict]]:
+        """Return (entities, relationships) around seed_ids, most relevant first.
 
-    def get_entity_neighborhoods(
-        self, entity_ids: list[str], hops: int = ENTITY_NEIGHBORHOOD_HOPS
-    ) -> dict[str, dict[str, Any]]:
-        """Return {entity_id: neighborhood} for each id, building the graph once."""
-        if not entity_ids:
-            return {}
-        graph = self.build_networkx_graph()
-        return {
-            entity_id: self.get_entity_neighborhood(entity_id, hops, graph=graph)
-            for entity_id in entity_ids
+        Breadth-first with one indexed query per hop, so cost tracks the result size rather
+        than the graph size. Seeds keep their given (relevance) order, and each hop takes
+        neighbors round-robin across their discovering parents — heaviest edges first — so a
+        single hub seed cannot spend the whole budget. Relationships among the selected
+        entities come first, then edges linking them to other entities — the latter still
+        carry facts when the seeds alone fill max_entities — heaviest first within each group.
+        """
+        selected = list(dict.fromkeys(seed_ids))[:max_entities]
+        chosen = set(selected)
+        frontier = selected
+        for _ in range(hops):
+            if not frontier or len(selected) >= max_entities:
+                break
+            frontier = self._next_hop(frontier, chosen, max_entities - len(selected))
+            selected.extend(frontier)
+
+        ids = json.dumps(selected)
+        rows_by_id = {
+            row["id"]: dict(row)
+            for row in self.conn.execute(
+                "SELECT id, name, type, description, community FROM entities "
+                "WHERE id IN (SELECT value FROM json_each(?))",
+                (ids,),
+            )
         }
+        relationships = self.conn.execute(
+            "SELECT source_id, target_id, label, SUM(weight) AS weight FROM relationships "
+            "WHERE source_id IN (SELECT value FROM json_each(:ids)) "
+            "OR target_id IN (SELECT value FROM json_each(:ids)) "
+            "GROUP BY source_id, target_id, label "
+            "ORDER BY (source_id IN (SELECT value FROM json_each(:ids)) "
+            "AND target_id IN (SELECT value FROM json_each(:ids))) DESC, "
+            "weight DESC, source_id, target_id, label LIMIT :limit",
+            {"ids": ids, "limit": max_relationships},
+        ).fetchall()
+        entities = [rows_by_id[entity_id] for entity_id in selected if entity_id in rows_by_id]
+        return entities, [dict(row) for row in relationships]
+
+    def _next_hop(self, frontier: list[str], chosen: set[str], budget: int) -> list[str]:
+        """Pick up to `budget` unchosen neighbors of frontier and add them to `chosen`."""
+        # Each edge is seen from both ends; per parent, heaviest neighbors first, ties by id.
+        rows = self.conn.execute(
+            "SELECT parent, neighbor FROM ("
+            " SELECT source_id AS parent, target_id AS neighbor, weight FROM relationships"
+            " WHERE source_id IN (SELECT value FROM json_each(:ids))"
+            " UNION ALL"
+            " SELECT target_id, source_id, weight FROM relationships"
+            " WHERE target_id IN (SELECT value FROM json_each(:ids))"
+            ") GROUP BY parent, neighbor ORDER BY SUM(weight) DESC, neighbor",
+            {"ids": json.dumps(frontier)},
+        ).fetchall()
+        ranked: dict[str, list[str]] = {parent: [] for parent in frontier}
+        for row in rows:
+            if row["neighbor"] not in chosen:
+                ranked[row["parent"]].append(row["neighbor"])
+        picked: list[str] = []
+        for tier in zip_longest(*ranked.values()):
+            for neighbor in tier:
+                if neighbor is None or neighbor in chosen:
+                    continue
+                chosen.add(neighbor)
+                picked.append(neighbor)
+                if len(picked) == budget:
+                    return picked
+        return picked
 
     def get_entities_for_community(self, community_id: int) -> list[dict]:
         """Return entity rows assigned to a given Louvain community."""
-        rows = self._conn.execute(
+        rows = self.conn.execute(
             "SELECT id, name, type, description FROM entities WHERE community = ?",
             (community_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
     def get_relationships_for_community(self, community_id: int) -> list[dict]:
-        """Return relationships where both endpoints belong to the given community."""
-        rows = self._conn.execute(
+        """Return relationships within the community, one row per (source, target, label)."""
+        rows = self.conn.execute(
             """
-            SELECT r.source_id, r.target_id, r.label, r.weight
+            SELECT r.source_id, r.target_id, r.label, SUM(r.weight) AS weight
             FROM relationships r
             JOIN entities s ON r.source_id = s.id
             JOIN entities t ON r.target_id = t.id
             WHERE s.community = ? AND t.community = ?
+            GROUP BY r.source_id, r.target_id, r.label
+            ORDER BY r.source_id, r.target_id, r.label
             """,
             (community_id, community_id),
         ).fetchall()
@@ -146,38 +171,30 @@ class CommunityStoreMixin:
     ) -> None:
         """Insert or replace a community summary row."""
         with self._write():
-            self._conn.execute(
+            self.conn.execute(
                 "INSERT OR REPLACE INTO communities "
                 "(id, summary, entity_ids, member_hash, embedding) VALUES (?, ?, ?, ?, ?)",
                 (community_id, summary, json.dumps(entity_ids), member_hash, embedding),
             )
 
-    def _deserialize_community_row(self, row: sqlite3.Row) -> dict:
-        d = dict(row)
-        d["entity_ids"] = json.loads(d["entity_ids"]) if d["entity_ids"] else []
-        return d
-
-    def get_community(self, community_id: int) -> dict | None:
-        """Return a single community row, or None if not found."""
-        row = self._conn.execute(
-            f"SELECT {_COMMUNITY_FIELDS} FROM communities WHERE id = ?",
-            (community_id,),
-        ).fetchone()
-        return self._deserialize_community_row(row) if row else None
-
     def get_communities(self) -> list[dict]:
         """Return all community rows (id, summary, entity_ids, member_hash, embedding)."""
-        rows = self._conn.execute(f"SELECT {_COMMUNITY_FIELDS} FROM communities").fetchall()
-        return [self._deserialize_community_row(row) for row in rows]
+        rows = self.conn.execute(
+            "SELECT id, summary, entity_ids, member_hash, embedding FROM communities"
+        ).fetchall()
+        return [
+            dict(row, entity_ids=json.loads(row["entity_ids"]) if row["entity_ids"] else [])
+            for row in rows
+        ]
 
     def get_active_community_ids(self) -> set[int]:
         """Return distinct community IDs currently assigned to entities."""
-        rows = self._conn.execute(_ACTIVE_COMMUNITY_IDS_SQL).fetchall()
+        rows = self.conn.execute(_ACTIVE_COMMUNITY_IDS_SQL).fetchall()
         return {row["community"] for row in rows}
 
     def delete_stale_communities(self) -> None:
         """Remove community rows whose id is no longer assigned to any entity."""
         with self._write():
-            self._conn.execute(
+            self.conn.execute(
                 f"DELETE FROM communities WHERE id NOT IN ({_ACTIVE_COMMUNITY_IDS_SQL})"
             )

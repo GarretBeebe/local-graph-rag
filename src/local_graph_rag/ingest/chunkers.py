@@ -146,16 +146,30 @@ def chunk_python(text: str) -> list[tuple[str, str | None]]:
 # -------------------------
 
 HEADER_PATTERN = re.compile(r"^#{1,6} ")
+_FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def _split_markdown_sections(text: str) -> list[str]:
-    """Split a markdown document into sections at header boundaries."""
+    """Split a markdown document into sections at header boundaries.
+
+    Lines inside fenced code blocks are never headers — a "# comment" in a shell snippet
+    must not cut the block in two. A fence closes only on the same character repeated at
+    least as many times; an unclosed fence runs to the end of the document.
+    """
     lines = text.splitlines()
     sections: list[str] = []
     current: list[str] = []
+    open_fence: str | None = None
 
     for line in lines:
-        if HEADER_PATTERN.match(line) and current:
+        fence = _FENCE_PATTERN.match(line)
+        if fence:
+            marker = fence.group(1)
+            if open_fence is None:
+                open_fence = marker
+            elif marker[0] == open_fence[0] and len(marker) >= len(open_fence):
+                open_fence = None
+        elif open_fence is None and HEADER_PATTERN.match(line) and current:
             sections.append("\n".join(current))
             current = []
         current.append(line)

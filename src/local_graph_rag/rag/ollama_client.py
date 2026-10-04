@@ -10,6 +10,7 @@ from typing import Any
 
 import requests
 from requests import RequestException
+from requests.exceptions import ReadTimeout
 
 from local_graph_rag.settings import (
     GENERATION_CONCURRENCY_LIMIT,
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 _thread_local = threading.local()
 _generation_slots = threading.BoundedSemaphore(GENERATION_CONCURRENCY_LIMIT)
 _GENERATION_SLOT_POLL_SECONDS = 0.1
+_NS_PER_SECOND = 1e9
 
 
 def _url(path: str) -> str:
@@ -57,7 +59,7 @@ def post_with_retry(
     cancel: threading.Event | None = None,
     **kwargs: Any,
 ) -> requests.Response:
-    """POST with up to OLLAMA_MAX_RETRIES retries on 5xx responses."""
+    """POST with up to OLLAMA_MAX_RETRIES retries on 5xx responses and connection errors."""
     url = _url(path)
     last_exc: Exception | None = None
     for attempt in range(OLLAMA_MAX_RETRIES + 1):
@@ -78,6 +80,10 @@ def post_with_retry(
             if not r.ok:
                 raise RuntimeError(f"Ollama request to {path} failed: HTTP {r.status_code}")
             return r
+        except ReadTimeout as e:
+            # The server took the request and is still working on it: a retry would queue the
+            # same expensive generation again behind the abandoned one.
+            raise RuntimeError(f"Ollama request to {path} timed out") from e
         except RequestException as e:
             last_exc = e
             if attempt < OLLAMA_MAX_RETRIES:
@@ -86,18 +92,37 @@ def post_with_retry(
     raise RuntimeError(f"Ollama request to {path} failed after retries: {last_exc}")
 
 
-def _generate_payload(
-    model: str, prompt: str, *, stream: bool, format: str | None = None
+def build_generate_payload(
+    model: str,
+    prompt: str,
+    *,
+    stream: bool,
+    format: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Return the /api/generate request body (also used to key caches of its responses)."""
     payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "stream": stream,
-        "options": {"num_ctx": OLLAMA_NUM_CTX},
+        "options": {"num_ctx": OLLAMA_NUM_CTX, **(options or {})},
     }
     if format is not None:
         payload["format"] = format
     return payload
+
+
+def _log_timings(model: str, data: dict[str, Any]) -> None:
+    """Log where a request's time went; a nonzero load means the model was cold-loaded."""
+    logger.info(
+        "ollama %s: load %.1fs, prompt %d tok in %.1fs, output %d tok in %.1fs",
+        model,
+        data.get("load_duration", 0) / _NS_PER_SECOND,
+        data.get("prompt_eval_count", 0),
+        data.get("prompt_eval_duration", 0) / _NS_PER_SECOND,
+        data.get("eval_count", 0),
+        data.get("eval_duration", 0) / _NS_PER_SECOND,
+    )
 
 
 @contextmanager
@@ -130,21 +155,19 @@ def generate(
     timeout: float = OLLAMA_GENERATE_TIMEOUT_SECONDS,
     cancel: threading.Event | None = None,
     format: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> str:
     """Return a complete generated response from Ollama."""
+    payload = build_generate_payload(model, prompt, stream=False, format=format, options=options)
     with _generation_slot(cancel=cancel, timeout=timeout):
-        r = post_with_retry(
-            "/api/generate",
-            cancel=cancel,
-            json=_generate_payload(model, prompt, stream=False, format=format),
-            timeout=timeout,
-        )
+        r = post_with_retry("/api/generate", cancel=cancel, json=payload, timeout=timeout)
     try:
         data = r.json()
     except ValueError as e:
         raise RuntimeError(f"Ollama generate returned invalid JSON: {e}") from e
     if "response" not in data:
         raise RuntimeError(f"Ollama generate missing 'response' field: {data.get('error', data)}")
+    _log_timings(model, data)
     return data["response"]
 
 
@@ -159,7 +182,7 @@ def stream_generate(
         _generation_slot(cancel=cancel, timeout=timeout),
         _get_session().post(
             _url("/api/generate"),
-            json=_generate_payload(model, prompt, stream=True),
+            json=build_generate_payload(model, prompt, stream=True),
             stream=True,
             timeout=timeout,
         ) as resp,
@@ -181,4 +204,5 @@ def stream_generate(
             if data.get("response"):
                 yield data["response"]
             if data.get("done"):
+                _log_timings(model, data)
                 break

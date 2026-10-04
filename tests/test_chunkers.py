@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from local_graph_rag.ingest.chunkers import chunk_document, chunk_python
+from local_graph_rag.ingest.chunkers import chunk_document, chunk_markdown, chunk_python
 from local_graph_rag.settings import MAX_CHUNK_CHARS
 
 # ---------------------------------------------------------------------------
@@ -132,3 +132,21 @@ def test_chunk_document_other_extension_returns_none_def_names():
     chunks = chunk_document(Path("notes.txt"), text)
     assert chunks
     assert all(def_name is None for _, def_name in chunks)
+
+
+# ---------------------------------------------------------------------------
+# chunk_markdown — fenced code blocks
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_markdown_does_not_split_on_comment_lines_inside_fences():
+    text = "# Setup\n\nRun:\n\n```bash\n# install deps\nuv sync\n# start\nuv run app\n```\n"
+    assert chunk_markdown(text) == [text.strip()]
+
+
+def test_chunk_markdown_splits_on_headers_after_a_closed_fence():
+    text = "# One\n\n~~~~\n# not a header\n~~~\nstill code\n~~~~\n\n# Two\n\nbody\n"
+    chunks = chunk_markdown(text)
+    assert len(chunks) == 2
+    assert chunks[0].endswith("~~~~")
+    assert chunks[1] == "# Two\n\nbody"

@@ -6,9 +6,10 @@ from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.graph.summarizer import (
     _build_summary_prompt,
     _compute_member_hash,
+    summarize_all_communities,
     summarize_community,
 )
-from tests.helpers import patch_ollama_generate
+from tests.helpers import add_entity, add_relationship, patch_ollama_generate
 
 
 @pytest.fixture
@@ -20,9 +21,9 @@ def store(tmp_path):
 
 def _add_entity_in_community(store: GraphStore, name: str, community: int) -> str:
     """Insert an entity and assign it to a community, bypassing detect_communities."""
-    slug = store.upsert_entity(name, type="TYPE", description="test entity")
-    store._conn.execute("UPDATE entities SET community = ? WHERE id = ?", (community, slug))
-    store._conn.commit()
+    slug = add_entity(store, name, type="TYPE", description="test entity")
+    store.conn.execute("UPDATE entities SET community = ? WHERE id = ?", (community, slug))
+    store.conn.commit()
     return slug
 
 
@@ -98,6 +99,50 @@ def test_summarize_community_regenerates_on_membership_change(store, monkeypatch
     communities = store.get_communities()
     assert len(communities) == 1
     assert communities[0]["summary"] == "new summary"
+
+
+def test_summarize_community_reuses_summary_after_renumbering(store, monkeypatch):
+    """Louvain may give an unchanged community a new id; its summary must carry over."""
+    slug = _add_entity_in_community(store, "Gamma", 5)
+    member_hash = _compute_member_hash(
+        store.get_entities_for_community(5), store.get_relationships_for_community(5)
+    )
+    store.upsert_community(0, "kept summary", [slug], member_hash, _ZERO_EMBEDDING)
+
+    def _fail_generate(*a, **kw):
+        raise AssertionError("an unchanged community must not be re-summarized")
+
+    patch_ollama_generate(monkeypatch, _fail_generate)
+
+    assert summarize_community(5, store) is False
+    summaries = {c["id"]: c["summary"] for c in store.get_communities()}
+    assert summaries[5] == "kept summary"
+
+
+def test_summarize_all_second_run_on_unchanged_graph_makes_no_llm_calls(store, monkeypatch):
+    for name in ("a", "b", "c", "d"):
+        add_entity(store, name, type="T", description=f"entity {name}")
+    add_relationship(store, "a", "b", "uses", "doc.py")
+    add_relationship(store, "c", "d", "uses", "doc.py")
+    store.upsert_community(99, "stale summary", ["gone"], "stale_hash", _ZERO_EMBEDDING)
+
+    calls: list[int] = []
+
+    def _fake_generate(*a, **kw):
+        calls.append(1)
+        return "summary"
+
+    patch_ollama_generate(monkeypatch, _fake_generate)
+    monkeypatch.setattr("local_graph_rag.graph.summarizer.embed", lambda *a, **kw: [0.1] * 768)
+
+    first = summarize_all_communities(store)
+    calls.clear()
+    second = summarize_all_communities(store)
+
+    assert first["summarized"] == 2
+    assert second == {"summarized": 0, "skipped": 2, "failed": 0}
+    assert calls == []
+    assert 99 not in {c["id"] for c in store.get_communities()}
 
 
 def test_delete_stale_communities_removes_old_rows(store):

@@ -159,11 +159,21 @@ def _validate_auth_settings() -> None:
         )
 
 
+def _validate_concurrency_settings() -> None:
+    if RAG_EXECUTOR_WORKERS <= GENERATION_CONCURRENCY_LIMIT:
+        raise ValueError(
+            "settings: RAG_EXECUTOR_WORKERS must be > GENERATION_CONCURRENCY_LIMIT so a worker "
+            "stays free for /v1/models, "
+            f"got {RAG_EXECUTOR_WORKERS} <= {GENERATION_CONCURRENCY_LIMIT}"
+        )
+
+
 def _validate_settings() -> None:
     _validate_core_positive_settings()
     _validate_chat_settings()
     _validate_chunk_settings()
     _validate_auth_settings()
+    _validate_concurrency_settings()
 
 
 _validate_settings()

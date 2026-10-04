@@ -17,6 +17,10 @@ from local_graph_rag.settings import (
 
 logger = logging.getLogger(__name__)
 
+# Inputs per /api/embed request: keeps one large file from exceeding the request timeout in
+# a single call, and makes a retry repeat one slice instead of the whole file.
+_EMBED_BATCH_SIZE = 64
+
 
 def _prepare_text(text: str) -> str:
     text = (text or "").strip()
@@ -62,27 +66,27 @@ def embed(text: str) -> list[float]:
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """Return embedding vectors for multiple texts via Ollama's batch embed API."""
-    if not texts:
-        return []
     prepared = [_prepare_text(text) for text in texts]
-
-    response = ollama_client.post_with_retry(
-        "/api/embed",
-        json={"model": EMBED_MODEL, "input": prepared},
-        timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
-    )
-
-    try:
-        data = response.json()
-    except ValueError as e:
-        raise RuntimeError(f"Batch embedding service returned invalid JSON: {e}") from e
-
-    if "embeddings" not in data:
-        raise RuntimeError("Batch embedding response missing 'embeddings' field")
-
-    vectors = data["embeddings"]
-    if len(vectors) != len(prepared):
-        raise RuntimeError(
-            f"Batch embedding returned {len(vectors)} vectors for {len(prepared)} texts"
+    vectors: list[list[float]] = []
+    for start in range(0, len(prepared), _EMBED_BATCH_SIZE):
+        batch = prepared[start : start + _EMBED_BATCH_SIZE]
+        response = ollama_client.post_with_retry(
+            "/api/embed",
+            json={"model": EMBED_MODEL, "input": batch},
+            timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
         )
-    return [_validate_vector(vector) for vector in vectors]
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            raise RuntimeError(f"Batch embedding service returned invalid JSON: {e}") from e
+
+        if "embeddings" not in data:
+            raise RuntimeError("Batch embedding response missing 'embeddings' field")
+        if len(data["embeddings"]) != len(batch):
+            raise RuntimeError(
+                f"Batch embedding returned {len(data['embeddings'])} vectors "
+                f"for {len(batch)} texts"
+            )
+        vectors.extend(_validate_vector(vector) for vector in data["embeddings"])
+    return vectors

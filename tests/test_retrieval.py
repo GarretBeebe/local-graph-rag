@@ -6,7 +6,7 @@ import pytest
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.global_retrieval import GlobalContext, global_retrieve
 from local_graph_rag.rag.local_retrieval import LocalContext, _extract_identifiers, local_retrieve
-from tests.helpers import patch_global_embed, patch_local_embed
+from tests.helpers import add_entity, patch_global_embed, patch_local_embed
 
 
 @pytest.fixture
@@ -87,7 +87,7 @@ def test_local_retrieve_deduplicates_entities(store, monkeypatch):
     patch_local_embed(monkeypatch)
 
     # Two chunks both linked to the same entity
-    slug = store.upsert_entity("Alpha", type="TYPE", description="desc")
+    slug = add_entity(store, "Alpha", type="TYPE", description="desc")
     store.register_chunks([("c1", "doc.txt", 0), ("c2", "doc.txt", 1)])
     store.link_chunks([("c1", slug), ("c2", slug)])
 
@@ -221,6 +221,22 @@ def test_local_retrieve_single_scroll_call_for_multiple_identifiers(store, monke
     local_retrieve("alpha_func and beta_func together", store, client)
 
     assert client.scroll_call_count == 1
+
+
+def test_local_retrieve_seeds_exact_def_matches_before_vector_hits(store, monkeypatch):
+    patch_local_embed(monkeypatch)
+    vector_entity = add_entity(store, "Vector Hit Entity")
+    def_entity = add_entity(store, "Def Hit Entity")
+    store.register_chunks([("c1", "doc.py", 0), ("c2", "doc.py", 1)])
+    store.link_chunks([("c1", vector_entity), ("c2", def_entity)])
+    client = _FakeQdrant(
+        [_FakePoint("c1", "vector text")],
+        scroll_points=[_FakePoint("c2", "def text", def_name="target_func")],
+    )
+
+    ctx = local_retrieve("explain target_func", store, client)
+
+    assert [e["id"] for e in ctx.entities] == [def_entity, vector_entity]
 
 
 # ---------------------------------------------------------------------------

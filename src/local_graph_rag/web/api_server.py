@@ -74,8 +74,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         for t in sweep_tasks:
             with suppress(asyncio.CancelledError):
                 await t
-        store.close()
+        # Executor first: its worker threads may still be using their store connections.
         shutdown_rag_executor()
+        store.close()
 
 
 app = FastAPI(title="Graph RAG API", lifespan=lifespan)

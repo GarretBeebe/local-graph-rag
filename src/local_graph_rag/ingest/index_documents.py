@@ -26,10 +26,10 @@ from local_graph_rag.common.paths import (
     normalize_path,
 )
 from local_graph_rag.common.qdrant import get_qdrant_client
-from local_graph_rag.graph.extractor import extract_entities_for_file
+from local_graph_rag.graph.extractor import ExtractionResult, extract_entities_for_file
 from local_graph_rag.graph.store import GraphStore, slugify
 from local_graph_rag.ingest.chunkers import chunk_document
-from local_graph_rag.ingest.doc_config import IndexConfig, load_index_config
+from local_graph_rag.ingest.doc_config import IndexConfig, IndexPath, load_index_config
 from local_graph_rag.rag.embed import embed_batch
 from local_graph_rag.settings import (
     ALLOWED_EXTENSIONS,
@@ -121,17 +121,10 @@ def _warn_unreadable_file(path: Path, error: BaseException) -> None:
     logger.warning("Skipping unreadable file %s: %s", path, error)
 
 
-def _delete_file(store: GraphStore, client: QdrantClient, filepath: str) -> None:
-    """Delete Qdrant vectors then SQLite data for a file.
-
-    Qdrant first: if Qdrant fails, chunk IDs remain in SQLite so the next run
-    can retry. If SQLite fails after Qdrant, stale SQLite rows are cleaned on
-    next run's delete_file_data and the Qdrant delete is idempotent.
-    """
+def _delete_vectors(store: GraphStore, client: QdrantClient, filepath: str) -> None:
     prior_ids = store.get_chunks_for_file(filepath)
     if prior_ids:
         client.delete(collection_name=COLLECTION, points_selector=PointIdsList(points=prior_ids))
-    store.delete_file_data(filepath)
 
 
 def _vector_config_value(config: object, name: str) -> object:
@@ -234,8 +227,8 @@ def _write_index_data(
     store: GraphStore,
     client: QdrantClient,
     current_hash: str,
-) -> int:
-    """Register chunks, upsert to Qdrant, write graph data. Returns entity count.
+) -> ExtractionResult:
+    """Register chunks, upsert to Qdrant, write graph data. Returns the extraction result.
 
     SQLite chunk IDs registered BEFORE Qdrant upsert: if Qdrant fails, IDs survive
     in SQLite for retry. Fingerprint written last — a crash before that line leaves no
@@ -245,7 +238,7 @@ def _write_index_data(
     store.register_chunks([(pid, filepath, i) for i, pid in enumerate(point_ids)])
     client.upsert(collection_name=COLLECTION, points=points)
     result = extract_entities_for_file(chunks, filepath, store)
-    entity_ids = store.upsert_entities(result.entities)
+    entity_ids = store.upsert_entities(result.entities, filepath)
     store.upsert_relationships([
         (slugify(rel["source"]), slugify(rel["target"]), rel["label"], filepath)
         for rel in result.relationships
@@ -253,20 +246,24 @@ def _write_index_data(
     store.link_chunks(_match_entity_chunks(chunks, point_ids, result.entities, entity_ids))
     if not result.had_failure:
         store.upsert_hash(filepath, current_hash)
-    return len(entity_ids)
+    return result
 
 
 def _cleanup_changed_file(
     path: Path,
     filepath: str,
-    stored_hash: str | None,
     store: GraphStore,
     client: QdrantClient,
 ) -> bool:
+    """Delete a changed file's Qdrant vectors, then its SQLite data and fingerprint.
+
+    Qdrant first: if Qdrant fails, chunk IDs remain in SQLite so the next run
+    can retry. If SQLite fails after Qdrant, stale SQLite rows are cleaned on
+    next run's delete_file_data and the Qdrant delete is idempotent.
+    """
     try:
-        _delete_file(store, client, filepath)
-        if stored_hash is not None:
-            store.clear_extraction_cache(filepath)
+        _delete_vectors(store, client, filepath)
+        store.delete_file_data(filepath)
     except Exception as e:
         logger.error("Cleanup before indexing failed for %s: %s", path, e)
         return False
@@ -301,18 +298,18 @@ def _build_points(
 
 
 def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
-    """Process one file through the full pipeline. Returns 'indexed' | 'skipped' | 'failed'."""
+    """Process one file through the full pipeline. Returns 'indexed' | 'skipped' | 'failed'.
+
+    The new version is chunked and embedded before the old one is deleted, so a failure
+    there (e.g. Ollama unreachable) leaves the previous version searchable.
+    """
     filepath = normalize_path(path)
 
     current_hash = _hash_file(path)
     if current_hash is None:
         return "failed"
-    stored_hash = store.get_hash(filepath)
-    if current_hash == stored_hash:
+    if current_hash == store.get_hash(filepath):
         return "skipped"
-
-    if not _cleanup_changed_file(path, filepath, stored_hash, store, client):
-        return "failed"
 
     text = _read_file(path)
     if text is None:
@@ -320,7 +317,12 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
 
     chunked = _chunk_file(path, text)
     if not chunked:
-        logger.info("No chunks produced for %s — skipping", path)
+        logger.info("No chunks produced for %s — removing any previous index data", path)
+        if not _cleanup_changed_file(path, filepath, store, client):
+            return "failed"
+        # Mark the empty content as processed so it isn't re-read every run; restoring the
+        # old content changes the hash again, so it gets re-indexed.
+        store.upsert_hash(filepath, current_hash)
         return "skipped"
     chunks = [c for c, _ in chunked]
 
@@ -328,15 +330,24 @@ def _index_file(path: Path, store: GraphStore, client: QdrantClient) -> str:
     if vectors is None:
         return "failed"
 
-    points = _build_points(filepath, chunked, vectors)
+    if not _cleanup_changed_file(path, filepath, store, client):
+        return "failed"
 
+    points = _build_points(filepath, chunked, vectors)
     try:
-        n_entities = _write_index_data(filepath, chunks, points, store, client, current_hash)
+        result = _write_index_data(filepath, chunks, points, store, client, current_hash)
     except Exception as e:
         logger.error("Indexing failed for %s: %s", path, e)
         return "failed"
 
-    logger.info("Indexed %s: %d chunks, %d entities", path.name, len(points), n_entities)
+    logger.info(
+        "Indexed %s: %d chunks, %d entities, %d of %d extracted relationships kept",
+        path.name,
+        len(points),
+        len(result.entities),
+        len(result.relationships),
+        result.relationships_extracted,
+    )
     return "indexed"
 
 
@@ -344,46 +355,58 @@ def _accept(fpath: Path, ignore: list[str]) -> bool:
     return not matches_ignore_pattern(fpath.name, ignore) and _is_safe_indexable_file(fpath)
 
 
-def _collect_files() -> list[Path]:
-    """Return all indexable files from configured index_paths or DOCS_PATH fallback."""
+def _walk_index_path(ip: IndexPath, ignore: list[str], unscanned: list[Path]) -> list[Path]:
+    """Return accepted files under ip, appending any directory that fails to list."""
+    if not ip.path.is_dir():
+        return []
+
+    def _on_walk_error(error: OSError) -> None:
+        logger.warning("Cannot list %s: %s", error.filename, error)
+        unscanned.append(Path(normalize_path(error.filename)))
+
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(ip.path, topdown=True, onerror=_on_walk_error):
+        # Emptying dirnames stops a non-recursive index path at its own directory.
+        dirnames[:] = [
+            d for d in dirnames
+            if ip.recursive and d not in ip.exclude_dirs and not matches_ignore_pattern(d, ignore)
+        ]
+        for fname in filenames:
+            fpath = Path(dirpath) / fname
+            if _accept(fpath, ignore):
+                files.append(fpath)
+    return files
+
+
+def _collect_files() -> tuple[list[Path], list[Path]]:
+    """Return (indexable files, unscanned paths) from index_paths or the DOCS_PATH fallback.
+
+    Unscanned paths are roots that are missing, empty, or unreadable, plus subdirectories
+    that failed to list. A file's absence there proves nothing — a bind-mounted share that
+    is offline looks empty — so main() must not treat their indexed files as deleted.
+    """
     if _CONFIG_LOAD_ERROR is not None:
         raise RuntimeError(
             f"Failed to load index config: {_CONFIG_LOAD_ERROR}"
         ) from _CONFIG_LOAD_ERROR
 
-    if _INDEX_CONFIG is None:
-        files = [p for p in DOCS_PATH.rglob("*") if _is_safe_indexable_file(p)]
-        logger.info("Found %d indexable files in %s", len(files), DOCS_PATH)
-        return files
-
+    index_paths = _INDEX_CONFIG.index_paths if _INDEX_CONFIG else [IndexPath(DOCS_PATH)]
+    ignore = _INDEX_CONFIG.ignore_patterns if _INDEX_CONFIG else []
     files: list[Path] = []
-    ignore = _INDEX_CONFIG.ignore_patterns
-    for ip in _INDEX_CONFIG.index_paths:
-        if not ip.path.is_dir():
-            logger.warning("Skipping missing index_path: %s", ip.path)
-            continue
-        if ip.recursive:
-            for dirpath, dirnames, filenames in os.walk(ip.path, topdown=True):
-                dirnames[:] = [
-                    d for d in dirnames
-                    if d not in ip.exclude_dirs
-                    and not matches_ignore_pattern(d, ignore)
-                ]
-                for fname in filenames:
-                    fpath = Path(dirpath) / fname
-                    if _accept(fpath, ignore):
-                        files.append(fpath)
-        else:
-            for fpath in ip.path.iterdir():
-                if fpath.is_file() and _accept(fpath, ignore):
-                    files.append(fpath)
+    unscanned: list[Path] = []
+    for ip in index_paths:
+        found = _walk_index_path(ip, ignore, unscanned)
+        if not found:
+            logger.warning(
+                "No indexable files under %s (missing, unreadable, or empty) — "
+                "keeping its existing index entries",
+                ip.path,
+            )
+            unscanned.append(ip.path)
+        files.extend(found)
 
-    logger.info(
-        "Found %d indexable files across %d index path(s)",
-        len(files),
-        len(_INDEX_CONFIG.index_paths),
-    )
-    return files
+    logger.info("Found %d indexable files across %d index path(s)", len(files), len(index_paths))
+    return files, unscanned
 
 
 def main() -> None:
@@ -393,13 +416,19 @@ def main() -> None:
     client = get_qdrant_client()
     ensure_collection(client)
 
-    files = _collect_files()
+    files, unscanned = _collect_files()
 
     on_disk = {normalize_path(p) for p in files}
-    stale = set(store.list_all_paths()) - on_disk
-    for stale_path in stale:
-        _delete_file(store, client, stale_path)
-        store.delete_hash(stale_path)
+    missing = set(store.list_all_paths()) - on_disk
+    stale = {p for p in missing if not is_under_any_root(Path(p), unscanned)}
+    if len(stale) < len(missing):
+        logger.warning(
+            "Keeping %d indexed file(s) under paths that could not be scanned",
+            len(missing) - len(stale),
+        )
+    for stale_path in sorted(stale):
+        _delete_vectors(store, client, stale_path)
+        store.purge_file(stale_path)
         logger.info("Removed stale: %s", stale_path)
     if stale:
         logger.info("Cleaned up %d stale file(s)", len(stale))
