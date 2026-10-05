@@ -149,8 +149,9 @@ How the hybrid works:
 - Community detection runs at the start of the summarizer, so production keeps its old LLM-only
   communities (375 entities in 105) until the next summarizer run.
 - Dry run on a production copy: 1,097 entities in 143 communities (largest 78). 32 of them are
-  unchanged and reuse their summary by member hash, so the run summarizes 111. That's about
-  20 s each on this CPU, roughly 37 minutes, so run it off-hours.
+  unchanged and reuse their summary by member hash, so the run summarizes 111.
+- Actual run (2026-10-04): 111 summarized, 32 reused, 0 failed, in 25 minutes. That's about 14 s
+  per community on this CPU, not the estimated 20 s. A second run summarized none.
 - Prompts are capped at 40 entities, so the largest community costs about what the earlier dry
   run measured: a 70-entity community gave a 721-token prompt and took 24.6 s, well within the
   120 s timeout.
