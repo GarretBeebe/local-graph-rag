@@ -47,10 +47,6 @@ def close_session() -> None:
         del _thread_local.session
 
 
-def get(path: str, **kwargs: Any) -> requests.Response:
-    return _get_session().get(_url(path), **kwargs)
-
-
 def post_with_retry(
     path: str,
     cancel: threading.Event | None = None,
@@ -184,13 +180,15 @@ def stream_generate(
     model: str,
     timeout: float = OLLAMA_GENERATE_TIMEOUT_SECONDS,
     cancel: threading.Event | None = None,
+    options: dict[str, Any] | None = None,
 ) -> Iterator[str]:
     """Yield text chunks from Ollama's streaming generation API."""
+    payload = build_generate_payload(model, prompt, stream=True, options=options)
     with (
         _generation_slot(cancel=cancel, timeout=timeout),
         _get_session().post(
             _url("/api/generate"),
-            json=with_keep_alive(build_generate_payload(model, prompt, stream=True)),
+            json=with_keep_alive(payload),
             stream=True,
             timeout=timeout,
         ) as resp,

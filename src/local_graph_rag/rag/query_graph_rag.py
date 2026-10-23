@@ -33,6 +33,10 @@ Answer:"""
 # plus def_name exact-matches), so cap the joined block to bound prompt size.
 _MAX_CHUNK_BLOCK_CHARS = 10_000
 
+# Real answers run a few hundred tokens. The cap bounds a model that never ends its turn, which
+# would otherwise hold the generation slot until its client disconnects.
+_ANSWER_OPTIONS = {"num_predict": 1024}
+
 
 def _format_local(ctx: LocalContext, question: str) -> str:
     names = {e["id"]: e["name"] for e in ctx.entities}
@@ -99,7 +103,7 @@ def ask(
 ) -> str:
     """Return a complete answer for the question."""
     prompt = _build_prompt(question, graph_mode, store, client, cancel=cancel)
-    return ollama_client.generate(prompt, model, cancel=cancel)
+    return ollama_client.generate(prompt, model, cancel=cancel, options=_ANSWER_OPTIONS)
 
 
 def ask_stream_sync(
@@ -112,7 +116,7 @@ def ask_stream_sync(
 ) -> Iterator[str]:
     """Yield text chunks for a streaming answer."""
     prompt = _build_prompt(question, graph_mode, store, client, cancel=cancel)
-    yield from ollama_client.stream_generate(prompt, model, cancel=cancel)
+    yield from ollama_client.stream_generate(prompt, model, cancel=cancel, options=_ANSWER_OPTIONS)
 
 
 _VALID_MODES = get_args(GraphMode)

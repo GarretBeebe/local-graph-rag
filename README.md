@@ -112,6 +112,10 @@ Three different Ollama models are used for different stages, tuned for the CPU-o
 
 All three are overridable via environment variables.
 
+Chat clients (the web UI, Chatbox) can only request `GEN_MODEL` plus any models listed in
+`CHAT_MODELS`. `/v1/models` returns exactly that list with `GEN_MODEL` first, so it's the web
+UI's default.
+
 ---
 
 ## Quick start

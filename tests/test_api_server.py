@@ -133,15 +133,11 @@ def test_models_no_token_returns_401(authed_client):
     assert res.status_code == 401
 
 
-def test_models_valid_bearer_returns_list(authed_client):
-    with patch("local_graph_rag.web.routes.ollama_client.get") as mock_get:
-        mock_get.return_value.raise_for_status = MagicMock()
-        mock_get.return_value.json.return_value = {"models": [{"name": "test-model"}]}
-        res = authed_client.get(
-            "/v1/models", headers=bearer_headers(_TEST_API_KEY)
-        )
+def test_models_lists_chat_models_in_order(authed_client):
+    with patch("local_graph_rag.web.routes.CHAT_MODELS", ["gen-model", "extra-model"]):
+        res = authed_client.get("/v1/models", headers=bearer_headers(_TEST_API_KEY))
     assert res.status_code == 200
-    assert "data" in res.json()
+    assert [m["id"] for m in res.json()["data"]] == ["gen-model", "extra-model"]
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +178,18 @@ def test_chat_missing_user_message_returns_400(insecure_client):
         json=chat_payload("sys", role="system"),
     )
     assert res.status_code == 400
+    assert res.json()["detail"] == "Chat request must include a user message"
+
+
+def test_chat_unlisted_model_returns_400(insecure_client):
+    res = insecure_client.post(
+        CHAT_COMPLETIONS_PATH,
+        json=chat_payload(model="qwen2.5-coder:1.5b-base"),
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert detail.startswith("Model not available")
+    assert "qwen2.5-coder:1.5b-base" not in detail  # never echo request input
 
 
 def test_chat_graph_mode_defaults_to_auto(insecure_client):

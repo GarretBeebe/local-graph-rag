@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import local_graph_rag.rag.query_graph_rag as query_graph_rag
 from local_graph_rag.rag.local_retrieval import LocalContext
 from local_graph_rag.rag.query_graph_rag import _build_prompt, _format_local, _validate_mode
 from tests.helpers import patch_global_embed, patch_local_embed
@@ -151,3 +152,29 @@ def test_build_prompt_global_mode_falls_back_to_local_when_context_empty(store, 
 
     assert "Entities:" in prompt
     assert "Community " not in prompt
+
+
+# ---------------------------------------------------------------------------
+# ask / ask_stream_sync
+# ---------------------------------------------------------------------------
+
+
+def test_answers_are_generated_with_a_token_cap(monkeypatch):
+    captured: list[dict] = []
+
+    def _generate(*args, **kwargs):
+        captured.append(kwargs)
+        return "answer"
+
+    def _stream_generate(*args, **kwargs):
+        captured.append(kwargs)
+        yield "chunk"
+
+    monkeypatch.setattr(query_graph_rag, "_build_prompt", lambda *a, **kw: "prompt")
+    monkeypatch.setattr(query_graph_rag.ollama_client, "generate", _generate)
+    monkeypatch.setattr(query_graph_rag.ollama_client, "stream_generate", _stream_generate)
+
+    assert query_graph_rag.ask("q", "m", "local", store=None, client=None) == "answer"
+    streamed = query_graph_rag.ask_stream_sync("q", "m", "local", store=None, client=None)
+    assert list(streamed) == ["chunk"]
+    assert [kw["options"]["num_predict"] for kw in captured] == [1024, 1024]

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from local_graph_rag.rag.query_graph_rag import GraphMode
 from local_graph_rag.settings import (
+    CHAT_MODELS,
     MAX_CHAT_CONTENT_ITEMS,
     MAX_CHAT_MESSAGE_CHARS,
     MAX_CHAT_MESSAGES,
@@ -40,6 +41,10 @@ def _message_size(content: str | list[dict[str, str]]) -> int:
 
 
 def validate_chat_request(req: ChatRequest) -> None:
+    if req.model not in CHAT_MODELS:
+        raise HTTPException(
+            status_code=400, detail=f"Model not available; use one of: {', '.join(CHAT_MODELS)}"
+        )
     total_chars = 0
     for message in req.messages:
         size = _message_size(message.content)

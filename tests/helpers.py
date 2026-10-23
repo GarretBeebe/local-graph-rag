@@ -6,6 +6,7 @@ from typing import Any
 from pytest import MonkeyPatch
 
 from local_graph_rag.graph.store import GraphStore
+from local_graph_rag.settings import GEN_MODEL
 
 ZERO_VECTOR_768 = [0.0] * 768
 LOCAL_EMBED_TARGET = "local_graph_rag.rag.local_retrieval.embed"
@@ -67,7 +68,7 @@ def chat_payload(
     content: str = "hi",
     *,
     role: str = "user",
-    model: str = "test",
+    model: str = GEN_MODEL,
     **overrides: Any,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {

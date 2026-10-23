@@ -28,6 +28,12 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 EXTRACT_MODEL = os.environ.get("EXTRACT_MODEL", "qwen2.5:3b")
 SUMMARIZE_MODEL = os.environ.get("SUMMARIZE_MODEL", "qwen2.5:7b")
 GEN_MODEL = os.environ.get("GEN_MODEL", "qwen2.5:14b")
+# Models clients may request for answers (comma-separated, named as in `ollama list`).
+# GEN_MODEL is always allowed and listed first, so the web UI's model picker defaults to it.
+_raw_chat_models = os.environ.get("CHAT_MODELS", "")
+CHAT_MODELS = list(
+    dict.fromkeys([GEN_MODEL, *(m.strip() for m in _raw_chat_models.split(",") if m.strip())])
+)
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
 OLLAMA_GENERATE_TIMEOUT_SECONDS = float(os.environ.get("OLLAMA_GENERATE_TIMEOUT_SECONDS", "120.0"))
 OLLAMA_EMBED_TIMEOUT_SECONDS = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_SECONDS", "60.0"))
@@ -53,9 +59,6 @@ RATE_MAX_LOGIN_REQUESTS = int(os.environ.get("RATE_MAX_LOGIN_REQUESTS", "10"))
 RAG_EXECUTOR_WORKERS = int(os.environ.get("RAG_EXECUTOR_WORKERS", "2"))
 RAG_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("RAG_REQUEST_TIMEOUT_SECONDS", "240.0"))
 STREAM_TIMEOUT_SECONDS = float(os.environ.get("STREAM_TIMEOUT_SECONDS", "120.0"))
-OLLAMA_MODEL_LIST_TIMEOUT_SECONDS = float(
-    os.environ.get("OLLAMA_MODEL_LIST_TIMEOUT_SECONDS", "5.0")
-)
 MAX_CHAT_MESSAGES = int(os.environ.get("MAX_CHAT_MESSAGES", "200"))
 MAX_CHAT_CONTENT_ITEMS = int(os.environ.get("MAX_CHAT_CONTENT_ITEMS", "32"))
 MAX_CHAT_MESSAGE_CHARS = int(os.environ.get("MAX_CHAT_MESSAGE_CHARS", "8000"))
@@ -164,11 +167,11 @@ def _validate_auth_settings() -> None:
 
 
 def _validate_concurrency_settings() -> None:
-    if RAG_EXECUTOR_WORKERS <= GENERATION_CONCURRENCY_LIMIT:
+    if RAG_EXECUTOR_WORKERS < GENERATION_CONCURRENCY_LIMIT:
         raise ValueError(
-            "settings: RAG_EXECUTOR_WORKERS must be > GENERATION_CONCURRENCY_LIMIT so a worker "
-            "stays free for /v1/models, "
-            f"got {RAG_EXECUTOR_WORKERS} <= {GENERATION_CONCURRENCY_LIMIT}"
+            "settings: RAG_EXECUTOR_WORKERS must be >= GENERATION_CONCURRENCY_LIMIT so every "
+            "admitted request gets a worker instead of queueing inside the executor, "
+            f"got {RAG_EXECUTOR_WORKERS} < {GENERATION_CONCURRENCY_LIMIT}"
         )
 
 

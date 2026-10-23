@@ -1,5 +1,6 @@
 """Unit tests for the Ollama HTTP client and batch embedding. No Ollama required."""
 
+import json
 import logging
 
 import pytest
@@ -18,6 +19,23 @@ class _FakeResponse:
 
     def json(self) -> dict:
         return self._payload
+
+
+class _FakeStreamResponse(_FakeResponse):
+    """A streamed /api/generate response: a context manager yielding NDJSON lines."""
+
+    def __init__(self, *lines: dict):
+        super().__init__({})
+        self._lines = [json.dumps(line) for line in lines]
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def iter_lines(self, decode_unicode: bool = False):
+        return iter(self._lines)
 
 
 class _FakeSession:
@@ -79,6 +97,20 @@ def test_generate_sends_options_and_logs_timings(fake_session, caplog):
         "temperature": 0,
     }
     assert "load 2.0s, prompt 12 tok" in caplog.text
+
+
+def test_stream_generate_sends_options_and_yields_chunks(fake_session):
+    session = fake_session(
+        _FakeStreamResponse({"response": "Hel"}, {"response": "lo", "done": True})
+    )
+
+    chunks = list(ollama_client.stream_generate("prompt", "model-x", options={"num_predict": 7}))
+
+    assert chunks == ["Hel", "lo"]
+    assert session.calls[0]["json"]["options"] == {
+        "num_ctx": ollama_client.OLLAMA_NUM_CTX,
+        "num_predict": 7,
+    }
 
 
 def test_embed_batch_splits_large_inputs_into_bounded_requests(monkeypatch: pytest.MonkeyPatch):

@@ -82,7 +82,8 @@ dependency removal. In order:
   - Decoupling the two would move queueing from the 240 s capacity wait into Ollama's 120 s
     generation-slot wait. On CPU hardware that turns ordinary queueing into stream timeouts.
   - Settings now require `RAG_EXECUTOR_WORKERS > GENERATION_CONCURRENCY_LIMIT`, because `/v1/models`
-    shares the executor.
+    shares the executor. Relaxed to `>=` on 2026-10-22: `/v1/models` now returns the configured
+    `CHAT_MODELS` without using the executor.
 - **The generation slot is not released during retry sleeps.** Read timeouts are no longer retried,
   so the remaining hold is at most `OLLAMA_MAX_RETRIES × 1 s` on fast-fail paths. That is not worth
   a new parameter.
@@ -209,3 +210,5 @@ Not applied, all low priority:
 - Chat history is discarded: only the latest user message drives retrieval and generation, so
   follow-up questions lose context.
 - `/v1/models` lists every Ollama model, including embedding models that cannot generate.
+  Decided 2026-10-22: it lists only `GEN_MODEL` plus `CHAT_MODELS`, and chat requests for any
+  other model get HTTP 400.

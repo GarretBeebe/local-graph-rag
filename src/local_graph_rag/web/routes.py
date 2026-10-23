@@ -1,7 +1,6 @@
 """FastAPI route handlers for the Graph RAG API."""
 
 import asyncio
-import logging
 import time
 from typing import Any
 
@@ -9,21 +8,15 @@ import bcrypt as _bcrypt
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
-import local_graph_rag.rag.ollama_client as ollama_client
 from local_graph_rag.settings import (
     ALLOW_INSECURE_LOCALONLY,
-    GEN_MODEL,
-    OLLAMA_MODEL_LIST_TIMEOUT_SECONDS,
+    CHAT_MODELS,
     SESSION_EXPIRY_SECONDS,
 )
 from local_graph_rag.web import user_store
 from local_graph_rag.web.auth import create_session, is_valid_token, revoke_session
 from local_graph_rag.web.openai_compat import build_chat_response, model_entry
-from local_graph_rag.web.rag_executor import (
-    get_rag_executor,
-    rag_stream_response,
-    run_rag_with_timeout,
-)
+from local_graph_rag.web.rag_executor import rag_stream_response, run_rag_with_timeout
 from local_graph_rag.web.schemas import (
     ChatRequest,
     LoginRequest,
@@ -37,8 +30,6 @@ from local_graph_rag.web.security import (
     password_fits_bcrypt,
 )
 
-logger = logging.getLogger(__name__)
-
 _SERVER_START = int(time.time())
 # Precomputed sentinel: login always runs bcrypt regardless of whether the username exists,
 # preventing timing-based username enumeration.
@@ -49,19 +40,8 @@ router = APIRouter()
 
 @router.get("/v1/models")
 @router.get("/models")
-async def models() -> dict[str, Any]:
-    loop = asyncio.get_running_loop()
-    try:
-        resp = await loop.run_in_executor(
-            get_rag_executor(),
-            lambda: ollama_client.get("/api/tags", timeout=OLLAMA_MODEL_LIST_TIMEOUT_SECONDS),
-        )
-        resp.raise_for_status()
-        data = [model_entry(m["name"], _SERVER_START) for m in resp.json().get("models", [])]
-    except Exception:
-        logger.warning("Failed to list Ollama models, returning default")
-        data = [model_entry(GEN_MODEL, _SERVER_START)]
-    return {"object": "list", "data": data}
+def models() -> dict[str, Any]:
+    return {"object": "list", "data": [model_entry(m, _SERVER_START) for m in CHAT_MODELS]}
 
 
 @router.post("/v1/chat/completions")
