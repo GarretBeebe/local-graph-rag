@@ -182,10 +182,10 @@ def test_ensure_collection_creates_payload_index(monkeypatch: pytest.MonkeyPatch
         ensure_collection(client)
 
         assert client.created_collection is (not exists)
-        assert len(client.payload_index_calls) == 1
-        call = client.payload_index_calls[0]
-        assert call["field_name"] == "def_name"
-        assert call["field_schema"] == PayloadSchemaType.KEYWORD
+        assert [(c["field_name"], c["field_schema"]) for c in client.payload_index_calls] == [
+            ("def_name", PayloadSchemaType.KEYWORD),
+            ("filepath", PayloadSchemaType.KEYWORD),
+        ]
 
 
 def test_ensure_collection_rejects_mismatched_existing_vector_size(
@@ -249,6 +249,46 @@ def test_write_index_data_sets_hash_on_full_success(
     assert store.get_hash("foo.py") == "hash123"
 
 
+def test_git_history_documents_are_embedded_but_not_extracted(
+    store: GraphStore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    history_dir = tmp_path / "git-history"
+    monkeypatch.setattr(_idx_mod, "GIT_HISTORY_DIR", history_dir)
+
+    def _no_extraction(*args, **kwargs):
+        raise AssertionError("git history must not be sent for entity extraction")
+
+    patch_ollama_generate(monkeypatch, _no_extraction)
+    filepath = str((history_dir / "repo.md").resolve())
+    chunks = ["## repo commit abc1234 (2026-10-22): Fix the thing"]
+    client = _FakeQdrant()
+
+    result = _write_index_data(filepath, chunks, _make_points(chunks, filepath), store, client, "h")
+
+    assert result.entities == []
+    assert len(client.upserts) == 1
+    assert store.get_chunks_for_file(filepath)
+    assert store.get_hash(filepath) == "h"
+
+
+def test_index_paths_add_the_git_history_root_only_for_projects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    history_dir = tmp_path / "git-history"
+    monkeypatch.setattr(_idx_mod, "GIT_HISTORY_DIR", history_dir)
+    docs = IndexPath(tmp_path / "docs")
+
+    _configure_index_paths(monkeypatch, docs)
+    assert _idx_mod._index_paths() == [docs]
+
+    code = IndexPath(tmp_path / "code", projects=True)
+    _configure_index_paths(monkeypatch, docs, code)
+    paths = _idx_mod._index_paths()
+    assert paths[:2] == [docs, code]
+    assert paths[2].path == history_dir.resolve()
+    assert paths[2].recursive is False
+
+
 # ---------------------------------------------------------------------------
 # _collect_files / main — paths that could not be scanned keep their index entries
 # ---------------------------------------------------------------------------
@@ -262,7 +302,7 @@ def _configure_index_paths(monkeypatch: pytest.MonkeyPatch, *index_paths: IndexP
     )
     monkeypatch.setattr(_idx_mod, "_INDEX_CONFIG", config)
     monkeypatch.setattr(_idx_mod, "_CONFIG_LOAD_ERROR", None)
-    monkeypatch.setattr(_idx_mod, "_DOCS_ROOTS", config.roots)
+    monkeypatch.setattr(_idx_mod, "_DOCS_ROOTS", [ip.path for ip in index_paths])
     monkeypatch.setattr(_idx_mod, "_ALLOWED", config.allowed_extensions)
 
 

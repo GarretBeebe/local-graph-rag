@@ -1,9 +1,9 @@
 FROM python:3.11-slim
 
-# curl serves the compose healthcheck. No compiler: every runtime dependency in uv.lock
-# ships a Linux wheel.
+# curl serves the compose healthcheck; git lets the indexer render each project's history
+# (ingest/git_history.py). No compiler: every runtime dependency in uv.lock ships a Linux wheel.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl && \
+    curl git && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.11.14

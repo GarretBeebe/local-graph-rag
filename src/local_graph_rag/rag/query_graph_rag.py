@@ -13,6 +13,7 @@ from local_graph_rag.common.logging import configure_cli_logging
 from local_graph_rag.graph.store import GraphStore
 from local_graph_rag.rag.global_retrieval import GlobalContext, global_retrieve
 from local_graph_rag.rag.local_retrieval import LocalContext, local_retrieve
+from local_graph_rag.rag.project_scope import project_paths
 from local_graph_rag.rag.query_router import route_query
 from local_graph_rag.settings import GEN_MODEL
 
@@ -80,8 +81,13 @@ def _build_prompt(
     client: QdrantClient,
     cancel: threading.Event | None = None,
 ) -> str:
+    # A question that names a project is answered from that project's files. Communities span
+    # projects, so global retrieval can't be narrowed: in auto mode a named project goes
+    # local, where the router's own rules send questions about a named project anyway.
+    paths = project_paths(question, store) if graph_mode != "global" else None
     use_global = graph_mode == "global" or (
         graph_mode == "auto"
+        and paths is None
         and route_query(question, store.has_community_summaries(), cancel=cancel) == "global"
     )
 
@@ -90,7 +96,7 @@ def _build_prompt(
         if ctx.community_summaries:
             return _format_global(ctx, question)
         logger.warning("Global context empty — falling back to local retrieval")
-    return _format_local(local_retrieve(question, store, client), question)
+    return _format_local(local_retrieve(question, store, client, paths=paths), question)
 
 
 def ask(

@@ -31,11 +31,13 @@ from local_graph_rag.graph.extractor import ExtractionResult, extract_entities_f
 from local_graph_rag.graph.store import GraphStore, slugify
 from local_graph_rag.ingest.chunkers import chunk_document
 from local_graph_rag.ingest.doc_config import IndexConfig, IndexPath, load_index_config
+from local_graph_rag.ingest.git_history import sync_git_histories
 from local_graph_rag.rag.embed import embed_batch
 from local_graph_rag.settings import (
     ALLOWED_EXTENSIONS,
     COLLECTION,
     DOCS_PATH,
+    GIT_HISTORY_DIR,
     MAX_INDEX_FILE_BYTES,
     VECTOR_SIZE,
 )
@@ -53,9 +55,17 @@ _ALLOWED: frozenset[str] = (
     _INDEX_CONFIG.allowed_extensions if _INDEX_CONFIG
     else normalize_extensions(ALLOWED_EXTENSIONS)
 )
-_DOCS_ROOTS: list[Path] = (
-    _INDEX_CONFIG.roots if _INDEX_CONFIG else [DOCS_PATH.resolve()]
-)
+
+
+def _index_paths() -> list[IndexPath]:
+    """Return the configured index paths, plus the git history directory if any hold projects."""
+    paths = _INDEX_CONFIG.index_paths if _INDEX_CONFIG else [IndexPath(DOCS_PATH)]
+    if any(ip.projects for ip in paths):
+        paths = [*paths, IndexPath(GIT_HISTORY_DIR, recursive=False)]
+    return paths
+
+
+_DOCS_ROOTS: list[Path] = [ip.path for ip in _index_paths()]
 _collection_ensured = False
 _HASH_READ_BLOCK_BYTES = 65536
 
@@ -160,12 +170,13 @@ def _validate_collection_config(client: QdrantClient) -> None:
 
 
 def ensure_collection(client: QdrantClient) -> None:
-    """Ensure the Qdrant collection exists and has the def_name payload index.
+    """Ensure the Qdrant collection exists and has its keyword payload indexes.
 
     Two responsibilities gated by one _collection_ensured flag: create the
-    collection if missing, and ensure the def_name keyword payload index exists
-    for exact-match lookups in local_retrieval. create_payload_index is
-    idempotent, so calling it on an already-indexed field is a cheap no-op.
+    collection if missing, and ensure the def_name index (exact-match identifier
+    lookups) and filepath index (project-scoped searches) used by local_retrieval
+    exist. create_payload_index is idempotent, so calling it on an already-indexed
+    field is a cheap no-op.
     """
     global _collection_ensured
     if _collection_ensured:
@@ -178,11 +189,12 @@ def ensure_collection(client: QdrantClient) -> None:
         )
     else:
         _validate_collection_config(client)
-    client.create_payload_index(
-        collection_name=COLLECTION,
-        field_name="def_name",
-        field_schema=PayloadSchemaType.KEYWORD,
-    )
+    for field_name in ("def_name", "filepath"):
+        client.create_payload_index(
+            collection_name=COLLECTION,
+            field_name=field_name,
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
     _collection_ensured = True
 
 
@@ -238,7 +250,13 @@ def _write_index_data(
     point_ids = [p.id for p in points]
     store.register_chunks([(pid, filepath, i) for i, pid in enumerate(point_ids)])
     client.upsert(collection_name=COLLECTION, points=points)
-    result = extract_entities_for_file(chunks, filepath, store)
+    # Git history is only searched, never extracted: commit text would add hundreds of
+    # mentions per repo, and the longest description of an entity wins, so commit wording
+    # would replace the descriptions taken from the code itself.
+    if Path(filepath).is_relative_to(GIT_HISTORY_DIR.resolve()):
+        result = ExtractionResult()
+    else:
+        result = extract_entities_for_file(chunks, filepath, store)
     entity_ids = store.upsert_entities(result.entities, filepath)
     store.upsert_relationships([
         (slugify(rel["source"]), slugify(rel["target"]), rel["label"], filepath)
@@ -367,7 +385,7 @@ def _collect_files() -> tuple[list[Path], list[Path]]:
             f"Failed to load index config: {_CONFIG_LOAD_ERROR}"
         ) from _CONFIG_LOAD_ERROR
 
-    index_paths = _INDEX_CONFIG.index_paths if _INDEX_CONFIG else [IndexPath(DOCS_PATH)]
+    index_paths = _index_paths()
     ignore = _INDEX_CONFIG.ignore_patterns if _INDEX_CONFIG else []
     files: list[Path] = []
     unscanned: list[Path] = []
@@ -393,6 +411,9 @@ def main() -> None:
     client = get_qdrant_client()
     ensure_collection(client)
 
+    sync_git_histories(
+        _index_paths(), _INDEX_CONFIG.ignore_patterns if _INDEX_CONFIG else [], GIT_HISTORY_DIR
+    )
     files, unscanned = _collect_files()
 
     on_disk = {normalize_path(p) for p in files}

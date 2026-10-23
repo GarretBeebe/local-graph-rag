@@ -154,6 +154,42 @@ def test_build_prompt_global_mode_falls_back_to_local_when_context_empty(store, 
     assert "Community " not in prompt
 
 
+def _capture_local_retrieve(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+
+    def _local_retrieve(*args, **kwargs):
+        calls.append(kwargs)
+        return LocalContext()
+
+    monkeypatch.setattr(query_graph_rag, "local_retrieve", _local_retrieve)
+    return calls
+
+
+def test_build_prompt_auto_mode_skips_the_router_for_a_named_project(store, monkeypatch):
+    routed: list[str] = []
+    monkeypatch.setattr(query_graph_rag, "project_paths", lambda q, s: ["/code/repo/a.py"])
+    monkeypatch.setattr(query_graph_rag, "route_query", lambda q, *a, **kw: routed.append(q))
+    retrievals = _capture_local_retrieve(monkeypatch)
+
+    _build_prompt("In repo-name, what is X?", "auto", store, _empty_qdrant())
+
+    assert routed == []
+    assert retrievals == [{"paths": ["/code/repo/a.py"]}]
+
+
+def test_build_prompt_global_mode_is_not_scoped(store, monkeypatch):
+    monkeypatch.setattr(
+        query_graph_rag, "project_paths", lambda q, s: pytest.fail("global mode is never scoped")
+    )
+    patch_global_embed(monkeypatch, [0.0] * 768)
+    retrievals = _capture_local_retrieve(monkeypatch)
+
+    _build_prompt("In repo-name, what is X?", "global", store, _empty_qdrant())
+
+    # No communities, so global falls back to local retrieval: still unscoped.
+    assert retrievals == [{"paths": None}]
+
+
 # ---------------------------------------------------------------------------
 # ask / ask_stream_sync
 # ---------------------------------------------------------------------------

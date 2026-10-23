@@ -28,6 +28,7 @@ class _FakePoint:
         text: str = "",
         def_name: str | None = None,
         chunk_index: int = 0,
+        filepath: str = "doc.txt",
     ):
         self.id = chunk_id
         payload: dict = {}
@@ -36,7 +37,16 @@ class _FakePoint:
         if def_name is not None:
             payload["def_name"] = def_name
         payload["chunk_index"] = chunk_index
+        payload["filepath"] = filepath
         self.payload = payload
+
+
+def _in_scope(points: list[_FakePoint], flt) -> list[_FakePoint]:
+    """Apply a filter's filepath condition, the only one besides def_name that retrieval sends."""
+    for condition in flt.must if flt else []:
+        if condition.key == "filepath":
+            points = [p for p in points if p.payload["filepath"] in condition.match.any]
+    return points
 
 
 class _FakeQdrant:
@@ -49,19 +59,19 @@ class _FakeQdrant:
         self._scroll_points = scroll_points or []
         self.scroll_call_count = 0
 
-    def query_points(self, *args, **kwargs):
+    def query_points(self, *args, query_filter=None, **kwargs):
         class _Result:
             pass
 
         r = _Result()
-        r.points = self._points
+        r.points = _in_scope(self._points, query_filter)
         return r
 
     def scroll(self, *, scroll_filter, **kwargs):
         self.scroll_call_count += 1
         wanted = set(scroll_filter.must[0].match.any)
         matches = [p for p in self._scroll_points if p.payload.get("def_name") in wanted]
-        return matches, None
+        return _in_scope(matches, scroll_filter), None
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +106,21 @@ def test_local_retrieve_deduplicates_entities(store, monkeypatch):
 
     entity_ids = [e["id"] for e in ctx.entities]
     assert entity_ids.count(slug) == 1
+
+
+def test_local_retrieve_scopes_both_searches_to_the_given_files(store, monkeypatch):
+    patch_local_embed(monkeypatch)
+    client = _FakeQdrant(
+        [_FakePoint("c1", "inside", filepath="a.py"), _FakePoint("c2", "outside", filepath="b.py")],
+        scroll_points=[
+            _FakePoint("d1", "def GraphStore in a", def_name="GraphStore", filepath="a.py"),
+            _FakePoint("d2", "def GraphStore in b", def_name="GraphStore", filepath="b.py"),
+        ],
+    )
+
+    ctx = local_retrieve("What does GraphStore do?", store, client, paths=["a.py"])
+
+    assert ctx.chunk_texts == ["inside", "def GraphStore in a"]
 
 
 def test_local_retrieve_empty_when_no_chunk_links(store, monkeypatch):

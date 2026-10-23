@@ -13,6 +13,9 @@ class IndexPath:
     path: Path
     recursive: bool = True
     exclude_dirs: frozenset[str] = field(default_factory=frozenset)
+    # Each direct subdirectory is a project: its git history is indexed (ingest/git_history.py)
+    # and questions that name it are answered from its files (rag/project_scope.py).
+    projects: bool = False
 
     def __post_init__(self) -> None:
         self.path = self.path.resolve()
@@ -24,10 +27,15 @@ class IndexConfig:
     allowed_extensions: frozenset[str]
     ignore_patterns: list[str]
 
-    @property
-    def roots(self) -> list[Path]:
-        # Paths are pre-resolved at construction time — no re-resolution needed.
-        return [p.path for p in self.index_paths]
+
+def _yaml_bool(entry: dict, key: str, *, default: bool) -> bool:
+    value = entry.get(key, default)
+    if isinstance(value, str):
+        raise ValueError(
+            f"index_config: {key!r} must be a YAML boolean (true/false), "
+            f"not a quoted string: {value!r}"
+        )
+    return bool(value)
 
 
 def load_index_config() -> IndexConfig | None:
@@ -47,21 +55,15 @@ def load_index_config() -> IndexConfig | None:
         if not path_str:
             raise ValueError("index_config: each index_paths entry must have a 'path' key")
 
-        recursive_raw = d.get("recursive", True)
-        if isinstance(recursive_raw, str):
-            raise ValueError(
-                f"index_config: 'recursive' must be a YAML boolean (true/false), "
-                f"not a quoted string: {recursive_raw!r}"
-            )
-
         exclude_dirs_raw = d.get("exclude_dirs", [])
         if isinstance(exclude_dirs_raw, str):
             exclude_dirs_raw = [exclude_dirs_raw]
 
         index_paths.append(IndexPath(
             path=Path(path_str),
-            recursive=bool(recursive_raw),
+            recursive=_yaml_bool(d, "recursive", default=True),
             exclude_dirs=frozenset(exclude_dirs_raw),
+            projects=_yaml_bool(d, "projects", default=False),
         ))
 
     raw_exts = raw.get("allowed_extensions")

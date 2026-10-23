@@ -99,6 +99,24 @@ def test_generate_sends_options_and_logs_timings(fake_session, caplog):
     assert "load 2.0s, prompt 12 tok" in caplog.text
 
 
+def test_generate_sends_a_json_schema_as_format(fake_session):
+    session = fake_session(_FakeResponse({"response": "{}"}))
+    schema = {"type": "object", "required": ["entities"]}
+
+    ollama_client.generate("prompt", "model-x", format=schema)
+
+    assert session.calls[0]["json"]["format"] == schema
+
+
+def test_generate_warns_when_the_reply_hits_the_token_cap(fake_session, caplog):
+    fake_session(_FakeResponse({"response": "{", "done_reason": "length", "eval_count": 7}))
+
+    with caplog.at_level(logging.WARNING, logger=ollama_client.__name__):
+        ollama_client.generate("prompt", "model-x", options={"num_predict": 7})
+
+    assert "cut off at the num_predict cap (7 tokens)" in caplog.text
+
+
 def test_stream_generate_sends_options_and_yields_chunks(fake_session):
     session = fake_session(
         _FakeStreamResponse({"response": "Hel"}, {"response": "lo", "done": True})

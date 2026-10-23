@@ -38,10 +38,14 @@ def _extract_identifiers(question: str) -> list[str]:
     return [t for t in _IDENTIFIER_RE.findall(question) if "_" in t or _CAMEL_RE.search(t)]
 
 
+def _in_files(paths: list[str]) -> FieldCondition:
+    return FieldCondition(key="filepath", match=MatchAny(any=paths))
+
+
 def _lookup_by_def_names(
-    client: QdrantClient, def_names: list[str]
+    client: QdrantClient, def_names: list[str], paths: list[str] | None = None
 ) -> dict[str, list[tuple[str, str]]]:
-    """Batch exact-match chunks whose def_name payload is in def_names.
+    """Batch exact-match chunks whose def_name payload is in def_names (and file in paths).
 
     Returns {def_name: [(chunk_id, chunk_text), ...]}, each list ordered by chunk_index —
     recovers original order for an oversized def split into multiple chunks.
@@ -52,7 +56,10 @@ def _lookup_by_def_names(
     points, _ = client.scroll(
         collection_name=COLLECTION,
         scroll_filter=Filter(
-            must=[FieldCondition(key="def_name", match=MatchAny(any=def_names))]
+            must=[
+                FieldCondition(key="def_name", match=MatchAny(any=def_names)),
+                *([_in_files(paths)] if paths else []),
+            ]
         ),
         limit=_MAX_IDENTIFIER_LOOKUPS * _MAX_PIECES_PER_DEF,
         with_payload=True,
@@ -79,10 +86,20 @@ def local_retrieve(
     *,
     k: int = ENTITY_RETRIEVAL_K,
     hops: int = ENTITY_NEIGHBORHOOD_HOPS,
+    paths: list[str] | None = None,
 ) -> LocalContext:
-    """Embed question → Qdrant search (+ exact def_name lookup) → entity neighborhood expansion."""
+    """Embed question → Qdrant search (+ exact def_name lookup) → entity neighborhood expansion.
+
+    paths, when given (a named project's files), limits both searches to those files.
+    """
     vector = embed(question)
-    results = client.query_points(COLLECTION, query=vector, limit=k, with_payload=True)
+    results = client.query_points(
+        COLLECTION,
+        query=vector,
+        limit=k,
+        query_filter=Filter(must=[_in_files(paths)]) if paths else None,
+        with_payload=True,
+    )
 
     chunk_ids: list[str] = []
     chunk_texts: list[str] = []
@@ -95,7 +112,7 @@ def local_retrieve(
     deduped_identifiers = list(dict.fromkeys(_extract_identifiers(question)))[
         :_MAX_IDENTIFIER_LOOKUPS
     ]
-    matches_by_def = _lookup_by_def_names(client, deduped_identifiers)
+    matches_by_def = _lookup_by_def_names(client, deduped_identifiers, paths)
     def_chunk_ids: list[str] = []
     for ident in deduped_identifiers:
         for chunk_id, text in matches_by_def.get(ident, []):

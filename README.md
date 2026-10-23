@@ -58,6 +58,18 @@ At query time, a router classifies the question and picks a retrieval strategy:
 Local queries combine vector search (to find seed entities) with graph traversal (to expand
 context). Global queries use pre-built community summaries retrieved by embedding similarity.
 
+**Projects and history.** An index path marked `projects: true` in
+`config/index_config.yaml` treats each of its direct subdirectories as a project.
+- **History:** for each project that is a git repo, the indexer writes its commit history to
+  `GIT_HISTORY_DIR`: a "Recent changes" list, then one section per commit. It indexes that
+  file with the documents, embedded for search but not entity-extracted, so "what changed
+  recently in X?" has something to retrieve.
+- **Scoping:** when a question names a project, its text search covers only that project's
+  files. The graph step can still pull in neighbouring entities from other projects that share
+  an entity's name. A question can name a project as an identifier (`local-graph-rag`,
+  `local_graph_rag`), or partly next to "project", "repo" or "codebase" ("the graph rag
+  project"). In auto mode such a question skips the router and uses local retrieval.
+
 ### Resumable ingestion
 
 Ingestion is safe to interrupt and guarantees consistent state across restarts:
@@ -74,8 +86,9 @@ Ingestion is safe to interrupt and guarantees consistent state across restarts:
   behind deletable IDs for the next run.
 
 - **Extraction cache.** Each LLM extraction batch is cached under a hash of its exact request
-  (model, prompt, text, options). Unchanged batches of an edited file are reused; anything that
-  changed — text, `EXTRACT_MODEL`, prompt — is re-extracted rather than replayed.
+  (model, prompt, text, options, JSON schema). Unchanged batches of an edited file are reused.
+  Anything that changed is re-extracted rather than replayed: the text, `EXTRACT_MODEL`, the
+  prompt or the schema.
 
 - **Stale file cleanup.** At startup, the pipeline compares tracked paths against files on disk
   and removes data for any files that were deleted — vectors from Qdrant, entities and
@@ -112,6 +125,12 @@ Three different Ollama models are used for different stages, tuned for the CPU-o
 
 All three are overridable via environment variables.
 
+Extraction is constrained so it always terminates with usable JSON:
+- The document text is fenced in the prompt, so source files that contain prompts of their
+  own get extracted rather than answered.
+- The reply must match a JSON schema with both arrays and a fixed set of entity types.
+- The reply is capped at 4,096 tokens.
+
 Chat clients (the web UI, Chatbox) can only request `GEN_MODEL` plus any models listed in
 `CHAT_MODELS`. `/v1/models` returns exactly that list with `GEN_MODEL` first, so it's the web
 UI's default.
@@ -126,7 +145,7 @@ cp config/index_config.yaml.example config/index_config.yaml  # customize which 
 
 docker compose up -d qdrant
 
-# Index documents
+# Index documents (plus the git history of each repo under a `projects: true` path)
 docker compose --profile indexer run --rm indexer
 
 # Detect communities and build LLM summaries
@@ -208,11 +227,16 @@ uv run graph-rag-query "What does GraphStore do?"
 
 # Force a specific retrieval mode: auto (default), local, or global
 uv run graph-rag-query "What are the main themes in this codebase?" --mode global
+
+# Name a project to search only its files and git history
+uv run graph-rag-query "What changed recently in local-graph-rag?"
 ```
 
 `auto` mode classifies the question with `EXTRACT_MODEL` (falling back to a keyword heuristic
 if the LLM call fails or returns something unexpected) and picks local or global retrieval
-accordingly. Global mode falls back to local retrieval if no community summaries exist yet.
+accordingly. A question that names a project skips the classifier and uses local retrieval
+scoped to that project (see [Projects and history](#architecture)). Global mode falls back to
+local retrieval if no community summaries exist yet.
 
 Both local and global prompts allow the model to answer from its own knowledge when the
 retrieved graph context is empty, incomplete, or not relevant to the question — answers are
@@ -232,17 +256,24 @@ local-graph-rag/
 │   │   ├── ollama_client.py      # Ollama HTTP client
 │   │   ├── query_graph_rag.py    # Query entry point — local + global, CLI
 │   │   ├── query_router.py       # Local vs. global classifier
+│   │   ├── project_scope.py      # Scopes questions that name a project to its files
 │   │   ├── local_retrieval.py    # Entity lookup + graph traversal
 │   │   └── global_retrieval.py   # Community summary retrieval
 │   ├── graph/
-│   │   ├── store.py              # NetworkX + SQLite graph store
+│   │   ├── store.py              # SQLite graph store facade + schema migrations
+│   │   ├── record_store.py       # Entity, relationship, chunk, cache, fingerprint records
+│   │   ├── community_store.py    # Graph traversal, community detection + summary storage
+│   │   ├── store_utils.py        # slugify
 │   │   ├── extractor.py          # LLM entity/relationship extraction
 │   │   └── summarizer.py         # Louvain community detection + summarization
 │   ├── ingest/
 │   │   ├── chunkers.py           # Document chunking
+│   │   ├── doc_config.py         # index_config.yaml loader
+│   │   ├── git_history.py        # Renders each project repo's git history for indexing
 │   │   └── index_documents.py    # Full ingestion pipeline
 │   ├── common/
 │   │   ├── config.py             # YAML config loader
+│   │   ├── logging.py            # CLI logging setup
 │   │   ├── paths.py              # Path normalization
 │   │   ├── qdrant.py             # Qdrant client singleton
 │   │   └── sqlite_store.py       # Thread-local SQLite connection wrapper
@@ -250,8 +281,11 @@ local-graph-rag/
 │   │   ├── api_server.py         # FastAPI server
 │   │   ├── routes.py             # HTTP routes
 │   │   ├── auth.py               # Session token + API key validation
+│   │   ├── middleware.py         # Auth + security-header middleware
+│   │   ├── security.py           # Shared web security helpers
 │   │   ├── user_store.py         # bcrypt user store
 │   │   ├── rate_limit.py         # Token-bucket rate limiter
+│   │   ├── rag_executor.py       # Thread pool + streaming bridge for RAG requests
 │   │   ├── schemas.py            # Request/response models
 │   │   ├── openai_compat.py      # OpenAI-compatible response builders
 │   │   └── static/               # Chat UI, served at /ui
@@ -259,13 +293,20 @@ local-graph-rag/
 ├── tests/
 │   ├── test_graph.py             # GraphStore + extractor unit tests
 │   ├── test_ingestion.py         # Fingerprint store + hash utility tests
+│   ├── test_chunkers.py          # Document chunking tests
+│   ├── test_doc_config.py        # Index config parsing tests
 │   ├── test_summarizer.py        # Community summarizer unit tests
 │   ├── test_retrieval.py         # Local + global retrieval unit tests
+│   ├── test_project_scope.py     # Project name matching + scoped paths
+│   ├── test_git_history.py       # Git history rendering + sync rules
 │   ├── test_query_router.py      # Local/global routing unit tests
 │   ├── test_query_graph_rag.py   # End-to-end query module tests
 │   ├── test_ollama_client.py     # Ollama retry/timing + batch embedding tests
 │   ├── test_api_server.py        # API server auth + endpoint tests
+│   ├── test_settings.py          # Settings validation tests
 │   └── test_index_security.py    # Ingestion security (path traversal, size limits)
+├── config/
+│   └── index_config.yaml.example # What to index; copy to index_config.yaml
 ├── notes/
 │   ├── planning/                 # Architecture plans and punch lists
 │   └── security/                 # Security review notes

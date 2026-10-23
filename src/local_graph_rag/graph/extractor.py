@@ -12,6 +12,12 @@ from local_graph_rag.settings import EXTRACT_BATCH_TOKENS, EXTRACT_MODEL
 
 logger = logging.getLogger(__name__)
 
+_ENTITY_TYPES = ("FUNCTION", "CLASS", "MODULE", "CONCEPT", "PERSON", "ORG", "FILE", "OTHER")
+
+# The text is fenced, and the instruction repeated after it, because documents that hold
+# prompts of their own (this file, for one) otherwise win: the model answered them with `{}`
+# or enumerated module-level names until the timeout. Also telling it not to follow the
+# document's instructions fixed nothing more and cost a sixth of the entities.
 _PROMPT_TEMPLATE = """\
 You are an information extraction assistant. Extract named entities and relationships \
 from the text below. Return ONLY valid JSON, no other text:
@@ -21,21 +27,68 @@ from the text below. Return ONLY valid JSON, no other text:
   "relationships": [{{"source": "string", "target": "string", "label": "string"}}]
 }}
 
-Entity types: FUNCTION, CLASS, MODULE, CONCEPT, PERSON, ORG, FILE, OTHER
+Entity types: {types}
 Relationship labels: snake_case verbs (uses, depends_on, calls, returns, extends, etc.)
 Only extract entities clearly present in the text. Return empty arrays if none found.
 
 Text:
-{text}"""
+<document>
+{text}
+</document>
+
+Now extract the entities and relationships from the document above."""
+
+# Ollama compiles this into a decoding grammar: the reply always has both arrays and a known
+# entity type. The caps sit just above the largest legitimate batch seen (59 entities, 27
+# relationships, p99 description 236 chars) and only break loops; num_predict is the hard
+# bound. A required description cost recall, so it stays optional.
+_EXTRACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "maxItems": 60,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 80},
+                    "type": {"type": "string", "enum": list(_ENTITY_TYPES)},
+                    "description": {"type": "string", "maxLength": 240},
+                },
+                "required": ["name", "type"],
+                "additionalProperties": False,
+            },
+        },
+        "relationships": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "maxLength": 80},
+                    "target": {"type": "string", "maxLength": 80},
+                    "label": {"type": "string", "maxLength": 40},
+                },
+                "required": ["source", "target", "label"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["entities", "relationships"],
+    "additionalProperties": False,
+}
 
 
 # Deterministic decoding: repeatable extractions, and cached results mean what they say.
 # repeat_penalty: Ollama's llama-server runner defaults it to 1.0, which let one dense batch
 # repeat description boilerplate for 2,333 tokens (830 with 1.1).
-_EXTRACT_OPTIONS = {"temperature": 0, "repeat_penalty": 1.1}
-# Dense batches can legitimately run past the general generation timeout (2,000+ tokens of
-# JSON at ~18 tok/s), so extraction gets its own.
-_EXTRACT_TIMEOUT_SECONDS = 300.0
+# num_predict: ~1.5x the longest legitimate reply (2,680 tokens). A reply cut off there is
+# invalid JSON, so it parses as empty and is cached like any reply: at temperature 0 a retry
+# would only reproduce it.
+_EXTRACT_OPTIONS = {"temperature": 0, "repeat_penalty": 1.1, "num_predict": 4096}
+# Covers a capped reply (~4 min at ~18 tok/s) plus time queued behind other generations, so
+# it only fires on a hang.
+_EXTRACT_TIMEOUT_SECONDS = 600.0
 
 
 @dataclass
@@ -155,11 +208,14 @@ def _load_or_extract_batch(
     filepath: str,
     store: GraphStore,
 ) -> ExtractionResult:
-    prompt = _PROMPT_TEMPLATE.format(text=batch_text)
+    prompt = _PROMPT_TEMPLATE.format(
+        types=", ".join(_ENTITY_TYPES),
+        text=batch_text.replace("</document>", "<\\/document>"),
+    )
     # Key the cache on the exact request body, so edited text, a new model, prompt, or
     # option all miss instead of replaying a result computed for something else.
     payload = ollama_client.build_generate_payload(
-        EXTRACT_MODEL, prompt, stream=False, format="json", options=_EXTRACT_OPTIONS
+        EXTRACT_MODEL, prompt, stream=False, format=_EXTRACT_SCHEMA, options=_EXTRACT_OPTIONS
     )
     prompt_sha256 = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     cached = store.get_cached_extraction(filepath, batch_index, prompt_sha256)
@@ -171,7 +227,7 @@ def _load_or_extract_batch(
         prompt,
         EXTRACT_MODEL,
         timeout=_EXTRACT_TIMEOUT_SECONDS,
-        format="json",
+        format=_EXTRACT_SCHEMA,
         options=_EXTRACT_OPTIONS,
     )
     store.cache_extraction(filepath, batch_index, prompt_sha256, response)

@@ -90,7 +90,7 @@ def build_generate_payload(
     prompt: str,
     *,
     stream: bool,
-    format: str | None = None,
+    format: dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the /api/generate request body (also used to key caches of its responses)."""
@@ -115,7 +115,11 @@ def with_keep_alive(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _log_timings(model: str, data: dict[str, Any]) -> None:
-    """Log where a request's time went; a nonzero load means the model was cold-loaded."""
+    """Log where a request's time went; a nonzero load means the model was cold-loaded.
+
+    Also warns when the reply stopped at its num_predict cap, which is otherwise silent: an
+    answer just ends early, and a capped JSON reply fails to parse.
+    """
     logger.info(
         "ollama %s: load %.1fs, prompt %d tok in %.1fs, output %d tok in %.1fs",
         model,
@@ -125,6 +129,12 @@ def _log_timings(model: str, data: dict[str, Any]) -> None:
         data.get("eval_count", 0),
         data.get("eval_duration", 0) / _NS_PER_SECOND,
     )
+    if data.get("done_reason") == "length":
+        logger.warning(
+            "ollama %s: reply cut off at the num_predict cap (%d tokens)",
+            model,
+            data.get("eval_count", 0),
+        )
 
 
 @contextmanager
@@ -156,7 +166,7 @@ def generate(
     model: str,
     timeout: float = OLLAMA_GENERATE_TIMEOUT_SECONDS,
     cancel: threading.Event | None = None,
-    format: str | None = None,
+    format: dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
 ) -> str:
     """Return a complete generated response from Ollama."""

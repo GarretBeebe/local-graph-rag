@@ -13,6 +13,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 DOCS_PATH = Path(os.environ.get("DOCS_PATH", str(PROJECT_ROOT / "documents")))
 INDEX_CONFIG_PATH = os.environ.get("INDEX_CONFIG_PATH", "")
 SQLITE_PATH = Path(os.environ.get("SQLITE_PATH", str(DATA_DIR / "graph.db")))
+# The indexer renders each project repo's git history here and indexes it with the documents.
+GIT_HISTORY_DIR = Path(os.environ.get("GIT_HISTORY_DIR", str(DATA_DIR / "git-history")))
 
 # Qdrant
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")

@@ -119,14 +119,6 @@ def test_real_config_excludes_claude_globally(monkeypatch: pytest.MonkeyPatch):
     assert ".claude" in cfg.ignore_patterns
 
 
-def test_roots_resolves_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    cfg_path = _write_config(tmp_path, f"index_paths:\n  - path: {tmp_path}\n")
-    patch_index_config_path(monkeypatch, cfg_path)
-    cfg = load_index_config()
-    assert cfg is not None
-    assert tmp_path.resolve() in cfg.roots
-
-
 # ---------------------------------------------------------------------------
 # load_index_config — error cases
 # ---------------------------------------------------------------------------
@@ -163,6 +155,25 @@ def test_raises_on_quoted_recursive_string(tmp_path: Path, monkeypatch: pytest.M
         load_index_config()
 
 
+def test_parses_projects_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg_path = _write_config(
+        tmp_path,
+        "index_paths:\n  - path: /code\n    projects: true\n  - path: /docs\n",
+    )
+    patch_index_config_path(monkeypatch, cfg_path)
+
+    cfg = load_index_config()
+
+    assert [ip.projects for ip in cfg.index_paths] == [True, False]
+
+
+def test_raises_on_quoted_projects_string(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg_path = _write_config(tmp_path, "index_paths:\n  - path: /code\n    projects: 'true'\n")
+    patch_index_config_path(monkeypatch, cfg_path)
+    with pytest.raises(ValueError, match="'projects' must be a YAML boolean"):
+        load_index_config()
+
+
 def test_bare_string_exclude_dirs_is_normalized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg_path = _write_config(
         tmp_path,
@@ -179,4 +190,4 @@ def test_path_stored_as_resolved_absolute(tmp_path: Path, monkeypatch: pytest.Mo
     patch_index_config_path(monkeypatch, cfg_path)
     cfg = load_index_config()
     assert cfg is not None
-    assert cfg.index_paths[0].path.is_absolute()
+    assert cfg.index_paths[0].path == tmp_path.resolve()

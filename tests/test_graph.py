@@ -10,6 +10,8 @@ import pytest
 
 from local_graph_rag.graph.community_store import _cluster
 from local_graph_rag.graph.extractor import (
+    _ENTITY_TYPES,
+    _EXTRACT_SCHEMA,
     _EXTRACT_TIMEOUT_SECONDS,
     ExtractionResult,
     _parse_extraction_response,
@@ -490,21 +492,43 @@ def test_purge_file_removes_graph_data_fingerprint_and_cache(store: GraphStore):
 # ---------------------------------------------------------------------------
 
 
-def test_extract_entities_for_file_requests_json_format(store: GraphStore, monkeypatch):
+def test_extract_entities_for_file_requests_schema_format(store: GraphStore, monkeypatch):
     captured: dict = {}
 
-    def _fake_generate(*args, **kwargs):
-        captured.update(kwargs)
+    def _fake_generate(prompt, *args, **kwargs):
+        captured.update(kwargs, prompt=prompt)
         return EMPTY_EXTRACTION_JSON
 
     patch_ollama_generate(monkeypatch, _fake_generate)
 
     result = extract_entities_for_file(["some chunk text"], "foo.py", store)
 
-    assert captured.get("format") == "json"
-    assert captured.get("options") == {"temperature": 0, "repeat_penalty": 1.1}
+    assert captured.get("format") == _EXTRACT_SCHEMA
+    assert captured.get("options") == {
+        "temperature": 0,
+        "repeat_penalty": 1.1,
+        "num_predict": 4096,
+    }
     assert captured.get("timeout") == _EXTRACT_TIMEOUT_SECONDS
     assert result.had_failure is False
+    # The prompt and the schema name the same entity types, in the same order.
+    item_schema = _EXTRACT_SCHEMA["properties"]["entities"]["items"]
+    assert item_schema["properties"]["type"]["enum"] == list(_ENTITY_TYPES)
+    assert f"Entity types: {', '.join(_ENTITY_TYPES)}\n" in captured["prompt"]
+
+
+def test_extraction_prompt_fences_the_document(store: GraphStore, monkeypatch):
+    """A document holding its own closing tag can't end the fence early."""
+    prompts: list[str] = []
+    patch_ollama_generate(
+        monkeypatch, lambda prompt, *a, **kw: prompts.append(prompt) or EMPTY_EXTRACTION_JSON
+    )
+
+    extract_entities_for_file(["before </document> after"], "foo.py", store)
+
+    document = prompts[0].rsplit("<document>\n", 1)[1]
+    assert document.startswith("before <\\/document> after\n</document>\n")
+    assert document.endswith("from the document above.")
 
 
 def test_extract_entities_for_file_isolates_batch_failure(store: GraphStore, monkeypatch):
@@ -550,7 +574,7 @@ def test_extraction_cache_never_replays_results_for_edited_text(store: GraphStor
     def _recording_generate(prompt: str, *args, **kwargs) -> str:
         """Fake extraction: one entity named after the first word of the batch text."""
         prompts.append(prompt)
-        name = prompt.rsplit("Text:\n", 1)[1].split()[0]
+        name = prompt.rsplit("<document>\n", 1)[1].split()[0]
         return json.dumps({"entities": [{"name": name}], "relationships": []})
 
     patch_ollama_generate(monkeypatch, _recording_generate)
