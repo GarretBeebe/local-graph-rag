@@ -30,7 +30,12 @@ Text:
 
 
 # Deterministic decoding: repeatable extractions, and cached results mean what they say.
-_EXTRACT_OPTIONS = {"temperature": 0}
+# repeat_penalty: Ollama's llama-server runner defaults it to 1.0, which let one dense batch
+# repeat description boilerplate for 2,333 tokens (830 with 1.1).
+_EXTRACT_OPTIONS = {"temperature": 0, "repeat_penalty": 1.1}
+# Dense batches can legitimately run past the general generation timeout (2,000+ tokens of
+# JSON at ~18 tok/s), so extraction gets its own.
+_EXTRACT_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass
@@ -163,7 +168,11 @@ def _load_or_extract_batch(
         return _parse_extraction_response(cached)
 
     response = ollama_client.generate(
-        prompt, EXTRACT_MODEL, format="json", options=_EXTRACT_OPTIONS
+        prompt,
+        EXTRACT_MODEL,
+        timeout=_EXTRACT_TIMEOUT_SECONDS,
+        format="json",
+        options=_EXTRACT_OPTIONS,
     )
     store.cache_extraction(filepath, batch_index, prompt_sha256, response)
     return _parse_extraction_response(response)

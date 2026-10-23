@@ -10,6 +10,7 @@ import pytest
 
 from local_graph_rag.graph.community_store import _cluster
 from local_graph_rag.graph.extractor import (
+    _EXTRACT_TIMEOUT_SECONDS,
     ExtractionResult,
     _parse_extraction_response,
     extract_entities_for_file,
@@ -501,7 +502,8 @@ def test_extract_entities_for_file_requests_json_format(store: GraphStore, monke
     result = extract_entities_for_file(["some chunk text"], "foo.py", store)
 
     assert captured.get("format") == "json"
-    assert captured.get("options") == {"temperature": 0}
+    assert captured.get("options") == {"temperature": 0, "repeat_penalty": 1.1}
+    assert captured.get("timeout") == _EXTRACT_TIMEOUT_SECONDS
     assert result.had_failure is False
 
 
