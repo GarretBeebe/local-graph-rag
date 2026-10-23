@@ -21,7 +21,7 @@ index_paths:
     recursive: true
     # Each direct subdirectory is a project: the indexer also indexes each git repo's history
     # (so "what changed recently in X?" can be answered), and a question that names a project
-    # is answered from that project's files only.
+    # searches only that project's text.
     projects: true
     exclude_dirs:
       - .git
