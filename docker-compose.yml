@@ -30,6 +30,7 @@ x-rag-env: &rag-env
 services:
 
   qdrant:
+    # Bump qdrant-client in pyproject.toml to the same minor version (then `uv lock`).
     image: qdrant/qdrant:v1.15.4
     container_name: graph-rag-qdrant
     restart: unless-stopped

@@ -7,7 +7,7 @@ name = "local-graph-rag"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "qdrant-client",
+    "qdrant-client~=1.15.0",  # same minor version as the qdrant image in docker-compose.yml
     "networkx>=2.8",
     "pyyaml",
     "tqdm",
